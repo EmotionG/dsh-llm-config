@@ -1,0 +1,8 @@
+# dsh-llm-config bundle patch
+# Insert this plugin into the profile composition: it registers a real
+# `ctx.llm` adapter per configured provider route (a normal plugin, so it can
+# use undici for HTTP).
+
+- insert:
+    - id: llm-config
+      name: dsh-llm-config
