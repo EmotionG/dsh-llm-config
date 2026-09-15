@@ -96,12 +96,12 @@ const SECTION_CSS = `
   color: var(--dsw-alias-label-secondary); letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.llmcfg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
-.llmcfg-field { display: flex; flex-direction: column; gap: 3px; }
+.llmcfg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; min-width: 0; }
+.llmcfg-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 /* Grow only inside a horizontal row. A Field as a column child of the card
    body would otherwise eat leftover HEIGHT (flex-basis 160/280px + grow),
    which is the empty band under the base-URL input. */
-.llmcfg-row > .llmcfg-field { flex: 1 1 160px; min-width: 110px; }
+.llmcfg-row > .llmcfg-field { flex: 1 1 160px; min-width: 110px; max-width: 100%; }
 .llmcfg-row > .llmcfg-field--grow { flex: 2 1 280px; }
 .llmcfg-label { font-size: 11px; line-height: 14px; color: var(--dsw-alias-label-tertiary); }
 .llmcfg-hint { font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-dimmed); }
@@ -164,6 +164,7 @@ const SECTION_CSS = `
   display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 10px; width: 100%;
   border-top: 1px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);
+  min-width: 0; max-width: 100%;
 }
 .llmcfg-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 28px; }
 .llmcfg-chip {
