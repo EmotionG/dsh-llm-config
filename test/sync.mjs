@@ -98,6 +98,37 @@ if (mounted) {
     JSON.stringify(shrunk.map(p => p.id)))
   check('the remaining provider stays', shrunk.some(p => p.id === 'second'),
     JSON.stringify(shrunk.map(p => p.id)))
+
+  console.log('\na retry-policy change re-registers the route (the policy is captured at registration)')
+  currentValue = {
+    providers: {
+      second: {
+        ...currentValue.providers.second,
+        retry: 9,
+      },
+    },
+  }
+  for (const fn of watchers) await fn()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  check('the route survives the policy change',
+    llm.listProviders().some(p => p.id === 'second'),
+    JSON.stringify(llm.listProviders().map(p => p.id)))
+  const policy = llm.providerRetryPolicy('second')
+  check('the NEW policy is live', policy.mode === 'normal' && policy.maxRetries === 9,
+    JSON.stringify(policy))
+
+  console.log('\nan unconfigured route keeps the framework default policy')
+  currentValue = {
+    providers: {
+      second: { ...currentValue.providers.second, retry: undefined },
+    },
+  }
+  for (const fn of watchers) await fn()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const defaultPolicy = llm.providerRetryPolicy('second')
+  check('the framework default is normal/5',
+    defaultPolicy.mode === 'normal' && defaultPolicy.maxRetries === 5,
+    JSON.stringify(defaultPolicy))
 }
 
 console.log(`\n${failures === 0 ? 'ALL SYNC CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)

@@ -18,6 +18,8 @@ export interface Translator {
         done: boolean;
     };
     finish(): StreamChunk[];
+    /** Whether any tool call was seen; a tool-carrying turn is never empty. */
+    hasToolCalls(): boolean;
 }
 /** Build the translator for one protocol. */
 export declare function createTranslator(protocol: ProtocolId): Translator;

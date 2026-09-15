@@ -17,15 +17,20 @@
 import { fetch as undiciFetch } from 'undici'
 import {
   attributionHeaders,
+  contentHasImage,
   LlmAdapter,
+  LlmError,
+  resolveRetryPolicy,
   type GenerateOptions,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmResolvedModelInfo,
+  type ResolvedRetryPolicy,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore, ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { ConfigModel, ConfigProvider } from './config.ts'
-import { authHeaders, requestUrl, serializeRequest } from './serialize.ts'
+import { authHeaders, collectImageRefs, requestImages, requestUrl, serializeRequest, type RequestImages } from './serialize.ts'
 import { createTranslator, sseEvents } from './stream.ts'
 
 export const PKG = 'llm-config'
@@ -34,7 +39,18 @@ export const PKG = 'llm-config'
 export interface ProviderRegistry {
   get(providerId: string): ConfigProvider | undefined
   resolveApiKey(provider: ConfigProvider): Promise<string>
+  /**
+   * The durable attachment service, when mounted. Image input is served only
+   * through it: an image block carries a reference, and the bytes live in the
+   * store. Returns `undefined` when the deployment offers no store, in which
+   * case an image-carrying request is refused with `UNSUPPORTED_CONTENT`.
+   */
+  resolveAttachments(): AttachmentStore | undefined
 }
+
+/** Default request-image policy: pixel budget and encoded-byte target. */
+const IMAGE_MAX_PIXELS = 64_000_000
+const IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
 /** Derive the highest declared effort when a model declares no default. */
 const EFFORT_RUNG: Record<string, number> = {
@@ -94,6 +110,19 @@ export class ConfigAdapter extends LlmAdapter {
     return { id: provider, name: entry?.displayName ?? this.#providerId }
   }
 
+  /**
+   * The provider-owned retry policy, captured when the route registers.
+   *
+   * `undefined` falls back to the framework's normal defaults (maxRetries 5),
+   * which is exactly what an unconfigured route should do — so a configured
+   * `retry` is returned verbatim-resolved, and an absent one is left alone.
+   */
+  providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined {
+    const entry = this.#entry()
+    if (entry?.retry === undefined) return undefined
+    return resolveRetryPolicy(entry.retry, `llm-config: provider "${this.#providerId}" retry`)
+  }
+
   listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const entry = this.#entry()
     if (entry === undefined) return Promise.resolve([])
@@ -151,9 +180,28 @@ export class ConfigAdapter extends LlmAdapter {
       }
     }
 
+    // Image input is served only when the model declares the modality AND the
+    // durable attachment store is mounted. The framework already projected
+    // images away for text-only models, so an image reaching this point on a
+    // text-only route means the modality declaration changed mid-flight.
+    const hasImages = options.messages.some(m => contentHasImage(m.content))
+    const attachments = hasImages ? this.#registry.resolveAttachments() : undefined
+    if (hasImages) {
+      const declared = model?.inputModalities ?? entry.models.find(m => m.id === options.model)?.inputModalities
+      if (declared === undefined || !declared.includes('image')) {
+        throw new LlmError(`${PKG}: model "${options.model}" does not accept image input`, 'UNSUPPORTED_CONTENT')
+      }
+      if (attachments === undefined) {
+        throw new LlmError(`${PKG}: image input requires the durable attachment service`, 'UNSUPPORTED_CONTENT')
+      }
+    }
+    const images = hasImages && attachments !== undefined
+      ? await this.#prepareImages(options, attachments)
+      : undefined
+
     const apiKey = await this.#registry.resolveApiKey(entry)
     const url = requestUrl(entry, options.model, apiKey, true)
-    const body = serializeRequest(options, model, entry)
+    const body = serializeRequest(options, model, entry, images)
     const headers: Record<string, string> = {
       accept: 'text/event-stream',
       // The seam requires attribution on every provider HTTP request.
@@ -194,12 +242,59 @@ export class ConfigAdapter extends LlmAdapter {
 
     const protocol = model?.protocol ?? entry.protocol
     const translator = createTranslator(protocol)
+    let sawVisibleText = false
     for await (const payload of sseEvents(response.body as ReadableStream<Uint8Array>, options.signal)) {
       const result = translator.push(payload)
-      for (const chunk of result.chunks) yield chunk
+      for (const chunk of result.chunks) {
+        if (chunk.type === 'text-delta' && chunk.text.trim().length > 0) sawVisibleText = true
+        yield chunk
+      }
       if (result.done) break
     }
-    for (const chunk of translator.finish()) yield chunk
+    for (const chunk of translator.finish()) {
+      if (chunk.type === 'block-end' && chunk.block.type === 'text' && chunk.block.text.trim().length > 0) {
+        sawVisibleText = true
+      }
+      yield chunk
+    }
+    // A completed turn that streamed ONLY reasoning (thinking models
+    // occasionally answer entirely inside the reasoning channel when the
+    // gateway maps all output there) would otherwise commit an assistant
+    // message whose visible part is empty — the UI then shows everything
+    // folded into the Think disclosure and no reply. Surface it as the
+    // framework's degenerate-completion failure instead, which is retryable
+    // by the default policy and never silently swallows the turn.
+    if (!sawVisibleText && !translator.hasToolCalls()) {
+      yield {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: `${PKG}: ${entry.displayName} completed with no visible content `
+              + `(reasoning only); retrying`,
+            code: 'EMPTY_RESPONSE',
+          },
+        },
+      }
+    }
+  }
+
+  /**
+   * Resolve every distinct image reference of one request into its
+   * deterministic request version, in parallel, then expose them as the
+   * serializer's {@link RequestImages} view.
+   */
+  async #prepareImages(
+    options: GenerateOptions,
+    attachments: AttachmentStore,
+  ): Promise<RequestImages> {
+    const refs: Map<string, ImageAttachmentRef> = collectImageRefs(options.messages)
+    const policy = { maxPixels: IMAGE_MAX_PIXELS, maxBytes: IMAGE_MAX_BYTES }
+    const ordered = [...refs.values()]
+    const versions = await Promise.all(ordered.map(
+      ref => attachments.readImageRequest(ref, policy, options.signal),
+    ))
+    return requestImages(new Map(ordered.map((ref, i) => [ref.attachmentId, versions[i] as RequestImageAttachment])))
   }
 }
 

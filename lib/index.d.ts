@@ -52,6 +52,7 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
         modelExcludePatterns?: string[] | null | undefined;
         defaultContextWindow?: number | null | undefined;
         streamIdleTimeoutMs?: number | null | undefined;
+        retry?: number | null | undefined;
         extraHeaders?: any;
         models?: ({
             id?: string | null | undefined;
@@ -92,6 +93,7 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
         modelExcludePatterns: z<string[], string[]>;
         defaultContextWindow: z<number, number>;
         streamIdleTimeoutMs: z<number, number>;
+        retry: z<number, number>;
         extraHeaders: z<any, any>;
         models: z<({
             id?: string | null | undefined;
@@ -161,6 +163,7 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
         modelExcludePatterns?: string[] | null | undefined;
         defaultContextWindow?: number | null | undefined;
         streamIdleTimeoutMs?: number | null | undefined;
+        retry?: number | null | undefined;
         extraHeaders?: any;
         models?: ({
             id?: string | null | undefined;
@@ -201,6 +204,7 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
         modelExcludePatterns: z<string[], string[]>;
         defaultContextWindow: z<number, number>;
         streamIdleTimeoutMs: z<number, number>;
+        retry: z<number, number>;
         extraHeaders: z<any, any>;
         models: z<({
             id?: string | null | undefined;

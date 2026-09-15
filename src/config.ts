@@ -9,6 +9,9 @@
  * @module dsh-llm-config/config
  */
 
+import { resolveRetryPolicy, type RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
+
 /** A reasoning-control vocabulary is a per-PROTOCOL property, not a global one. */
 export type EffortMode = 'none' | 'field' | 'thinking'
 
@@ -78,6 +81,13 @@ export interface ConfigProvider {
   modelExcludePatterns: string[]
   defaultContextWindow: number
   streamIdleTimeoutMs: number
+  /**
+   * Request-retry policy for this provider route, in the framework's
+   * `RetryPolicyConfig` shape (`mode: normal|always`, `maxRetries`,
+   * `retryableCodes`, `backoff`). Resolved through the framework's own
+   * `resolveRetryPolicy` so defaults match `dsh-llm` exactly.
+   */
+  retry?: RetryPolicyConfig
   models: ConfigModel[]
   extraHeaders?: Record<string, unknown>
 }
@@ -132,6 +142,31 @@ function normalizeBaseUrl(raw: unknown, where: string): string {
   const base = String(raw).trim().replace(/\/+$/, '')
   if (!/^https?:\/\//i.test(base)) fail(`${where} must be an absolute http(s) URL (got: ${String(raw)})`)
   return base
+}
+
+/**
+ * Read one raw `retry` value into the framework's config shape, tolerating the
+ * plain-number shorthand `retry: 3` (meaning `maxRetries: 3`).
+ *
+ * Full validation is delegated to the framework's `resolveRetryPolicy`, which
+ * runs inside {@link resolveProvider} so an invalid policy is refused at the
+ * same place every other unusable field is.
+ */
+function readRetryConfig(raw: unknown): RetryPolicyConfig | undefined {
+  if (raw === undefined || raw === null) return undefined
+  // Numeric shorthand: `retry: 3` is `maxRetries: 3` in normal mode.
+  if (typeof raw === 'number') {
+    if (!Number.isSafeInteger(raw) || raw < 0) fail('retry must be a non-negative integer when given as a number')
+    return { mode: 'normal', maxRetries: raw }
+  }
+  if (!isObject(raw)) fail('retry must be an object or a non-negative integer')
+  const mode = nonEmptyString(raw.mode) ? raw.mode.trim() : 'normal'
+  if (mode !== 'normal' && mode !== 'always') fail('retry.mode must be "normal" or "always"')
+  const record: Record<string, unknown> = { mode }
+  if (raw.maxRetries !== undefined && raw.maxRetries !== null) record.maxRetries = raw.maxRetries
+  if (raw.retryableCodes !== undefined && raw.retryableCodes !== null) record.retryableCodes = raw.retryableCodes
+  if (raw.backoff !== undefined && raw.backoff !== null) record.backoff = raw.backoff
+  return record as unknown as RetryPolicyConfig
 }
 
 function resolveEffort(modelId: string, raw: unknown): ModelEffort | undefined {
@@ -305,6 +340,14 @@ function resolveProvider(raw: unknown, index: number): ConfigProvider {
     defaultContextWindow,
     streamIdleTimeoutMs,
     models,
+  }
+  // Validate the retry policy through the framework's own resolver: its error
+  // messages already name the field and constraint, and staying on that path
+  // keeps defaults in lockstep with dsh-llm's own provider plugins.
+  const retry = readRetryConfig(raw.retry)
+  if (retry !== undefined) {
+    resolveRetryPolicy(retry, `llm-config: provider "${id}" retry`)
+    provider.retry = retry
   }
   if (apiKeyEnv !== undefined) provider.apiKeyEnv = apiKeyEnv
   if (nonEmptyString(raw.apiKeyHeader)) provider.apiKeyHeader = raw.apiKeyHeader.trim()

@@ -130,6 +130,10 @@ interface ProviderRow {
   defaultContextWindow: string
   streamIdleTimeoutMs: string
   modelExcludePatterns: string
+  /** Retry mode: 'normal' (bounded) or 'always' (unbounded). */
+  retryMode: string
+  /** Max retries after the first request; empty = framework default (5). */
+  retryMax: string
   models: ModelRow[]
 }
 
@@ -173,7 +177,7 @@ function emptyProvider(): ProviderRow {
     id: '', displayName: '', enabled: true, protocol: 'openai-chat', baseURL: '',
     authScheme: '', apiKeyEnv: '', apiKeyHeader: '', apiKeyPrefix: '',
     maxTokens: '', defaultContextWindow: '', streamIdleTimeoutMs: '',
-    modelExcludePatterns: '', models: [],
+    modelExcludePatterns: '', retryMode: 'normal', retryMax: '', models: [],
   }
 }
 
@@ -208,6 +212,17 @@ function toModelRow(raw: Record<string, unknown>): ModelRow {
 }
 
 function toProviderRow(raw: Record<string, unknown>): ProviderRow {
+  // Retry reads BOTH stored shapes: the numeric shorthand and the full object.
+  const retryRaw = raw.retry
+  let retryMode = 'normal'
+  let retryMax = ''
+  if (typeof retryRaw === 'number') {
+    retryMax = String(retryRaw)
+  } else if (typeof retryRaw === 'object' && retryRaw !== null) {
+    const record = retryRaw as Record<string, unknown>
+    if (record.mode === 'always') retryMode = 'always'
+    if (typeof record.maxRetries === 'number') retryMax = String(record.maxRetries)
+  }
   return {
     id: text(raw.id),
     displayName: text(raw.displayName),
@@ -223,6 +238,8 @@ function toProviderRow(raw: Record<string, unknown>): ProviderRow {
     streamIdleTimeoutMs: text(raw.streamIdleTimeoutMs),
     modelExcludePatterns: (Array.isArray(raw.modelExcludePatterns)
       ? (raw.modelExcludePatterns as string[]) : []).join(', '),
+    retryMode,
+    retryMax,
     models: (Array.isArray(raw.models) ? raw.models : []).map(m => toModelRow(m as Record<string, unknown>)),
   }
 }
@@ -306,6 +323,15 @@ function providerToJson(p: ProviderRow): Record<string, unknown> {
   if (sit !== undefined) out.streamIdleTimeoutMs = sit
   const ex = listOrUndef(p.modelExcludePatterns)
   if (ex !== undefined) out.modelExcludePatterns = ex
+  // Retry: the numeric shorthand when only the count differs from the default
+  // shape; the full object when a mode is set. An empty count in normal mode
+  // writes nothing, so the framework default (5) applies.
+  const retryMax = numOrUndef(p.retryMax)
+  if (p.retryMode === 'always') {
+    out.retry = { mode: 'always' }
+  } else if (retryMax !== undefined) {
+    out.retry = retryMax
+  }
   return out
 }
 
@@ -784,6 +810,22 @@ export function ModelProvidersSection(props: InjectedProps): JSX.Element {
             <input className="llmcfg-input" value={row.modelExcludePatterns} placeholder="embed, rerank"
               onChange={e => patchRow(pi, { modelExcludePatterns: e.target.value })} />
           </Field>
+          <div className="llmcfg-row">
+            <Field label={t('retryMode')}>
+              <select className="llmcfg-select" value={row.retryMode}
+                onChange={e => patchRow(pi, { retryMode: e.target.value })}>
+                <option value="normal">{t('retryModeNormal')}</option>
+                <option value="always">{t('retryModeAlways')}</option>
+              </select>
+            </Field>
+            {row.retryMode === 'normal' ? (
+              <Field label={t('retryMax')} hint={t('retryMaxHint')}>
+                <input className="llmcfg-input" value={row.retryMax} placeholder="5"
+                  onChange={e => patchRow(pi, { retryMax: e.target.value })} />
+              </Field>
+            ) : null}
+          </div>
+          <p className="llmcfg-hint">{t('retryHint')}</p>
         </details>
         </Section>
 

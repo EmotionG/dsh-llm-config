@@ -8,6 +8,7 @@
  *
  * @module dsh-llm-config/config
  */
+import { type RetryPolicyConfig } from '@deepseek-ai/dsh-llm';
 /** A reasoning-control vocabulary is a per-PROTOCOL property, not a global one. */
 export type EffortMode = 'none' | 'field' | 'thinking';
 /** Wire formats this plugin can speak. */
@@ -68,6 +69,13 @@ export interface ConfigProvider {
     modelExcludePatterns: string[];
     defaultContextWindow: number;
     streamIdleTimeoutMs: number;
+    /**
+     * Request-retry policy for this provider route, in the framework's
+     * `RetryPolicyConfig` shape (`mode: normal|always`, `maxRetries`,
+     * `retryableCodes`, `backoff`). Resolved through the framework's own
+     * `resolveRetryPolicy` so defaults match `dsh-llm` exactly.
+     */
+    retry?: RetryPolicyConfig;
     models: ConfigModel[];
     extraHeaders?: Record<string, unknown>;
 }

@@ -51,6 +51,8 @@ export async function* sseEvents(
 export interface Translator {
   push(payload: string): { chunks: StreamChunk[]; done: boolean }
   finish(): StreamChunk[]
+  /** Whether any tool call was seen; a tool-carrying turn is never empty. */
+  hasToolCalls(): boolean
 }
 
 interface ToolSlot {
@@ -87,10 +89,25 @@ function toUsage(usage: Record<string, unknown> | null): TokenUsage | undefined 
 
 function openAiTranslator(): Translator {
   const calls = new Map<number, ToolSlot>()
+  /** Wire tool-call index → allocated stream block index. */
+  const callAt = new Map<number, number>()
   let usage: Record<string, unknown> | null = null
   let finished: string | null = null
-  let opened = false
+  /**
+   * Block indexes are ALLOCATED, one per distinct block: reasoning, text, and
+   * every tool call each own an index. The harness assembler keys blocks by
+   * index, so sharing index 0 between reasoning and text merges the visible
+   * answer INTO the thinking block (everything lands in the Think
+   * disclosure), and a tool call at wire index 0 overwrites that merged
+   * block's content entirely.
+   */
+  let nextIndex = 0
+  let reasoningAt: number | null = null
+  let reasoningText = ''
+  let textAt: number | null = null
+  let textText = ''
   return {
+    hasToolCalls: () => calls.size > 0,
     push(payload) {
       const chunks: StreamChunk[] = []
       if (payload === '[DONE]') return { chunks, done: true }
@@ -114,26 +131,43 @@ function openAiTranslator(): Translator {
       const reasoning = typeof delta.reasoning_content === 'string'
         ? delta.reasoning_content
         : (typeof delta.reasoning === 'string' ? delta.reasoning : '')
-      if (reasoning.length > 0) chunks.push({ type: 'reasoning-delta', index: 0, text: reasoning })
-      if (typeof delta.content === 'string' && delta.content.length > 0) {
-        if (!opened) {
-          chunks.push({ type: 'block-start', index: 0, blockType: 'text' })
-          opened = true
+      if (reasoning.length > 0) {
+        if (reasoningAt === null) {
+          reasoningAt = nextIndex
+          nextIndex += 1
+          chunks.push({ type: 'block-start', index: reasoningAt, blockType: 'reasoning' })
         }
-        chunks.push({ type: 'text-delta', index: 0, text: delta.content })
+        reasoningText += reasoning
+        chunks.push({ type: 'reasoning-delta', index: reasoningAt, text: reasoning })
+      }
+      if (typeof delta.content === 'string' && delta.content.length > 0) {
+        if (textAt === null) {
+          textAt = nextIndex
+          nextIndex += 1
+          chunks.push({ type: 'block-start', index: textAt, blockType: 'text' })
+        }
+        textText += delta.content
+        chunks.push({ type: 'text-delta', index: textAt, text: delta.content })
       }
       const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : []
       for (const raw of toolCalls) {
         const call = raw as Record<string, unknown>
-        const at = typeof call.index === 'number' ? call.index : 0
-        if (typeof call.id === 'string' && call.id.length > 0) {
-          calls.set(at, { id: call.id, name: typeof call.name === 'string' ? call.name : '', args: '' })
+        const wire = typeof call.index === 'number' ? call.index : 0
+        if (!calls.has(wire)) {
+          calls.set(wire, { id: '', name: '', args: '' })
+          const at = nextIndex
+          nextIndex += 1
+          callAt.set(wire, at)
+          chunks.push({ type: 'block-start', index: at, blockType: 'tool-call' })
         }
-        const slot = calls.get(at)
-        if (slot === undefined) continue
+        const slot = calls.get(wire)
+        const at = callAt.get(wire)
+        if (slot === undefined || at === undefined) continue
+        if (typeof call.id === 'string' && call.id.length > 0) slot.id = call.id
         const fn = (typeof call.function === 'object' && call.function !== null ? call.function : {}) as
           Record<string, unknown>
         if (typeof fn.name === 'string' && fn.name.length > 0) slot.name = fn.name
+        else if (typeof call.name === 'string' && call.name.length > 0) slot.name = call.name
         const argsDelta = typeof fn.arguments === 'string' ? fn.arguments : ''
         if (argsDelta.length > 0) slot.args += argsDelta
         if ((typeof call.id === 'string' && call.id.length > 0) || argsDelta.length > 0) {
@@ -152,7 +186,15 @@ function openAiTranslator(): Translator {
     },
     finish() {
       const chunks: StreamChunk[] = []
-      for (const [at, slot] of calls) {
+      if (reasoningAt !== null) {
+        chunks.push({ type: 'block-end', index: reasoningAt, block: { type: 'reasoning', text: reasoningText } })
+      }
+      if (textAt !== null) {
+        chunks.push({ type: 'block-end', index: textAt, block: { type: 'text', text: textText } })
+      }
+      for (const [wire, slot] of calls) {
+        const at = callAt.get(wire)
+        if (at === undefined) continue
         chunks.push({
           type: 'block-end',
           index: at,
@@ -182,6 +224,7 @@ function anthropicTranslator(): Translator {
   let usage: Record<string, unknown> | null = null
   let stopReason: string | null = null
   return {
+    hasToolCalls: () => calls.size > 0,
     push(payload) {
       const chunks: StreamChunk[] = []
       let event: Record<string, unknown>
@@ -245,6 +288,9 @@ function anthropicTranslator(): Translator {
     },
     finish() {
       const chunks: StreamChunk[] = []
+      // Anthropic carries its own per-block indexes in every event, so blocks
+      // close at their native index; the accumulated thinking/text is only
+      // needed for blocks that never received an explicit terminal event.
       for (const [at, slot] of calls) {
         chunks.push({
           type: 'block-end',
@@ -285,8 +331,18 @@ function geminiTranslator(): Translator {
   const calls = new Map<number, ToolSlot>()
   let usage: Record<string, unknown> | null = null
   let geminiFinish: string | null = null
-  let opened = false
+  /**
+   * Allocated block indexes, mirroring {@link openAiTranslator}: a thought
+   * part and an answer part each own an index, and every functionCall block
+   * is allocated beyond them — never reusing the text index.
+   */
+  let nextIndex = 0
+  let thoughtAt: number | null = null
+  let thoughtText = ''
+  let textAt: number | null = null
+  let textText = ''
   return {
+    hasToolCalls: () => calls.size > 0,
     push(payload) {
       const chunks: StreamChunk[] = []
       let event: Record<string, unknown>
@@ -305,16 +361,31 @@ function geminiTranslator(): Translator {
         const parts = Array.isArray(content.parts) ? content.parts : []
         for (const raw of parts) {
           const part = raw as Record<string, unknown>
+          // Gemini thought summaries carry thought: true.
+          const isThought = part.thought === true
           if (typeof part.text === 'string' && part.text.length > 0) {
-            if (!opened) {
-              chunks.push({ type: 'block-start', index: 0, blockType: 'text' })
-              opened = true
+            if (isThought) {
+              if (thoughtAt === null) {
+                thoughtAt = nextIndex
+                nextIndex += 1
+                chunks.push({ type: 'block-start', index: thoughtAt, blockType: 'reasoning' })
+              }
+              thoughtText += part.text
+              chunks.push({ type: 'reasoning-delta', index: thoughtAt, text: part.text })
+            } else {
+              if (textAt === null) {
+                textAt = nextIndex
+                nextIndex += 1
+                chunks.push({ type: 'block-start', index: textAt, blockType: 'text' })
+              }
+              textText += part.text
+              chunks.push({ type: 'text-delta', index: textAt, text: part.text })
             }
-            chunks.push({ type: 'text-delta', index: 0, text: part.text })
           }
           if (typeof part.functionCall === 'object' && part.functionCall !== null) {
             const fn = part.functionCall as Record<string, unknown>
-            const at = calls.size
+            const at = nextIndex
+            nextIndex += 1
             const name = typeof fn.name === 'string' ? fn.name : ''
             const id = `call_${at}_${name === '' ? 'tool' : name}`
             const args = JSON.stringify(fn.args ?? {})
@@ -338,6 +409,12 @@ function geminiTranslator(): Translator {
     },
     finish() {
       const chunks: StreamChunk[] = []
+      if (thoughtAt !== null) {
+        chunks.push({ type: 'block-end', index: thoughtAt, block: { type: 'reasoning', text: thoughtText } })
+      }
+      if (textAt !== null) {
+        chunks.push({ type: 'block-end', index: textAt, block: { type: 'text', text: textText } })
+      }
       for (const [at, slot] of calls) {
         chunks.push({
           type: 'block-end',

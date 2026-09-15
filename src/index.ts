@@ -24,6 +24,8 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 // Importing the connection types loads its `Context.connection` augmentation.
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+// Type-only: image input resolves through the durable attachment store.
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { ConfigAdapter, fetchCatalogCandidates, PKG, type ProviderRegistry } from './adapter.ts'
 import {
   credentialRefFor,
@@ -75,6 +77,10 @@ export const ConfigSchema = z.object({
     modelExcludePatterns: z.array(z.string()),
     defaultContextWindow: z.number(),
     streamIdleTimeoutMs: z.number(),
+    // Retry policy: a number (maxRetries shorthand) or the framework's
+    // RetryPolicyConfig object. Full validation runs in resolveConfig through
+    // the framework's own resolveRetryPolicy.
+    retry: z.union([z.number(), z.any()]),
     extraHeaders: z.any(),
     models: z.array(z.object({
       id: z.string().required(),
@@ -161,6 +167,11 @@ export function apply(ctx: Context, config: StoredSection): void {
     get(providerId) {
       return resolve().find(p => p.id === providerId)
     },
+    resolveAttachments() {
+      // Image input rides the durable attachment service when the deployment
+      // mounts one; `ctx.get` keeps it optional exactly like credentials.
+      return ctx.get('attachments') as AttachmentStore | undefined
+    },
     async resolveApiKey(provider) {
       // The credentials service takes a BARE REFERENCE STRING.
       const credentials = ctx.get('credentials')
@@ -180,19 +191,31 @@ export function apply(ctx: Context, config: StoredSection): void {
     },
   }
 
-  /** Adapter routes, kept in sync with the configured provider set. */
+  /**
+   * Adapter routes, kept in sync with the configured provider set.
+   *
+   * The RETRY POLICY is captured at registration time (the framework resolves
+   * `providerRetryPolicy` once per route registration), so a route whose
+   * policy changed must be re-registered for the new value to take effect.
+   * `routeFacts` is the JSON signature of the policy per route; a change
+   * disposes and re-registers exactly that route.
+   */
   const routes = new Map<string, () => void>()
+  const routePolicies = new Map<string, string>()
   const sync = (): void => {
-    const next = new Set(resolve().filter(p => p.enabled).map(p => p.id))
+    const live = resolve().filter(p => p.enabled)
+    const nextPolicies = new Map(live.map(p => [p.id, JSON.stringify(p.retry ?? null)]))
     for (const [id, dispose] of Array.from(routes)) {
-      if (!next.has(id)) {
+      if (!nextPolicies.has(id) || routePolicies.get(id) !== nextPolicies.get(id)) {
         dispose()
         routes.delete(id)
+        routePolicies.delete(id)
       }
     }
-    for (const id of Array.from(next)) {
+    for (const [id, policy] of Array.from(nextPolicies)) {
       if (routes.has(id)) continue
       routes.set(id, ctx.llm.registerAdapter([id], new ConfigAdapter(registry, id)))
+      routePolicies.set(id, policy)
     }
   }
 

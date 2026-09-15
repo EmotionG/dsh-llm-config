@@ -51,6 +51,42 @@ console.log('\nconfig resolution accepts a legacy ARRAY too')
 const legacy = resolveConfig({ providers: [{ id: 'a', baseURL: 'https://a.example/v1' }] })
 check('array shape still resolves', legacy.providers.length === 1)
 
+console.log('\nretry policy config')
+const retrySection = resolveConfig({
+  providers: {
+    r: { id: 'r', baseURL: 'https://r.example/v1', retry: 3 },
+  },
+})
+check('numeric shorthand becomes normal maxRetries', retrySection.providers[0].retry?.mode === 'normal'
+  && retrySection.providers[0].retry?.maxRetries === 3, JSON.stringify(retrySection.providers[0].retry))
+const retryObj = resolveConfig({
+  providers: {
+    r: { id: 'r', baseURL: 'https://r.example/v1', retry: { mode: 'always' } },
+  },
+})
+check('object form passes through', retryObj.providers[0].retry?.mode === 'always')
+const retryNone = resolveConfig({
+  providers: { r: { id: 'r', baseURL: 'https://r.example/v1' } },
+})
+check('absent retry stays undefined (framework default 5)', retryNone.providers[0].retry === undefined)
+const rejectsRetry = (name, section) => {
+  try {
+    resolveConfig(section)
+    check(name, false, 'it was accepted')
+  } catch {
+    check(name, true)
+  }
+}
+rejectsRetry('negative retry count rejected', {
+  providers: { r: { id: 'r', baseURL: 'https://r.example/v1', retry: -1 } },
+})
+rejectsRetry('unknown retry mode rejected', {
+  providers: { r: { id: 'r', baseURL: 'https://r.example/v1', retry: { mode: 'nope' } } },
+})
+rejectsRetry('bad backoff rejected', {
+  providers: { r: { id: 'r', baseURL: 'https://r.example/v1', retry: { mode: 'normal', backoff: { initialDelayMs: -5 } } } },
+})
+
 console.log('\nconfig rejects what the adapter cannot serve')
 const rejects = (name, section) => {
   try {
@@ -83,7 +119,10 @@ const base = {
 const openai = serializeRequest(base, model, provider)
 check('model set', openai.model === 'deepseek-v4-flash')
 check('stream true', openai.stream === true)
-check('user text mapped', openai.messages[0].content === 'hi')
+check('user text mapped', (() => {
+  const text = openai.messages[0].content
+  return text === 'hi' || (Array.isArray(text) && text.length === 1 && text[0].text === 'hi')
+})())
 check('system becomes leading message', (() => {
   const withSystem = serializeRequest({ ...base, system: 'be brief' }, model, provider)
   return withSystem.messages[0].role === 'system' && withSystem.messages[0].content === 'be brief'
@@ -162,6 +201,13 @@ out1.push(...t1.push(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'sto
 out1.push(...t1.finish())
 check('reasoning delta emitted', out1.some(c => c.type === 'reasoning-delta' && c.text === 'think'))
 check('text deltas emitted', out1.filter(c => c.type === 'text-delta').map(c => c.text).join('') === 'Hello world')
+check('reasoning and text own DISTINCT block indexes', (() => {
+  const reasoningAt = out1.find(c => c.type === 'reasoning-delta')?.index
+  const textAt = out1.find(c => c.type === 'text-delta')?.index
+  return reasoningAt !== undefined && textAt !== undefined && reasoningAt !== textAt
+})(), `reasoning@${out1.find(c => c.type === 'reasoning-delta')?.index} text@${out1.find(c => c.type === 'text-delta')?.index}`)
+check('reasoning closes as a reasoning block', out1.some(c => c.type === 'block-end' && c.block?.type === 'reasoning' && c.block.text === 'think'))
+check('text closes as a text block', out1.some(c => c.type === 'block-end' && c.block?.type === 'text' && c.block.text === 'Hello world'))
 check('block-start precedes text', out1.findIndex(c => c.type === 'block-start') < out1.findIndex(c => c.type === 'text-delta'))
 check('usage disjoint math', (() => {
   const u = out1.find(c => c.type === 'usage')
@@ -169,6 +215,31 @@ check('usage disjoint math', (() => {
 })())
 check('finish reason stop', out1.find(c => c.type === 'finish').reason.kind === 'stop')
 check('[DONE] terminates', t1.push('[DONE]').done === true)
+
+console.log('\nSSE translation: reasoning-ONLY completion stays separate')
+const t1b = createTranslator('openai-chat')
+const out1b = []
+out1b.push(...t1b.push(JSON.stringify({ choices: [{ delta: { reasoning_content: 'all in head' } }] })).chunks)
+out1b.push(...t1b.push(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } })).chunks)
+out1b.push(...t1b.finish())
+check('reasoning still closes as reasoning', out1b.some(c => c.type === 'block-end' && c.block?.type === 'reasoning'))
+check('no text block is fabricated', !out1b.some(c => c.type === 'block-end' && c.block?.type === 'text'))
+check('hasToolCalls reports none', t1b.hasToolCalls() === false)
+
+console.log('\nSSE translation: reasoning + tool call indexes stay distinct')
+const t1c = createTranslator('openai-chat')
+const out1c = []
+out1c.push(...t1c.push(JSON.stringify({ choices: [{ delta: { reasoning_content: 'plan' } }] })).chunks)
+out1c.push(...t1c.push(JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'read' } }] } }] })).chunks)
+out1c.push(...t1c.push(JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] })).chunks)
+out1c.push(...t1c.finish())
+check('tool call block does not collide with reasoning', (() => {
+  const reasoningAt = out1c.find(c => c.type === 'reasoning-delta')?.index
+  const toolAt = out1c.find(c => c.type === 'tool-call-delta')?.index
+  return reasoningAt !== undefined && toolAt !== undefined && reasoningAt !== toolAt
+})(), `reasoning@${out1c.find(c => c.type === 'reasoning-delta')?.index} tool@${out1c.find(c => c.type === 'tool-call-delta')?.index}`)
+check('both blocks close with their own content', out1c.filter(c => c.type === 'block-end').length === 2)
+check('hasToolCalls reports the call', t1c.hasToolCalls() === true)
 
 console.log('\nSSE translation: OpenAI streaming tool call')
 const t2 = createTranslator('openai-chat')
@@ -204,8 +275,69 @@ out4.push(...t4.push(JSON.stringify({ candidates: [{ content: { parts: [{ functi
 out4.push(...t4.finish())
 check('gemini text delta', out4.some(c => c.type === 'text-delta' && c.text === 'Gem'))
 check('gemini functionCall', out4.some(c => c.type === 'block-end' && c.block?.type === 'tool-call'))
+check('gemini text and tool blocks stay distinct', (() => {
+  const textAt = out4.find(c => c.type === 'text-delta')?.index
+  const toolAt = out4.find(c => c.type === 'tool-call-delta')?.index
+  return textAt !== undefined && toolAt !== undefined && textAt !== toolAt
+})())
 check('gemini usage', out4.find(c => c.type === 'usage')?.usage.totalTokens === 10)
 check('gemini tool-calls finish', out4.find(c => c.type === 'finish').reason.kind === 'tool-calls')
+
+console.log('\nSSE translation: Gemini thought parts map to reasoning')
+const t4b = createTranslator('google-gemini')
+const out4b = []
+out4b.push(...t4b.push(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ponder', thought: true }] } }] })).chunks)
+out4b.push(...t4b.push(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'answer' }] }, finishReason: 'STOP' }] })).chunks)
+out4b.push(...t4b.finish())
+check('thought part becomes a reasoning block', out4b.some(c => c.type === 'block-end' && c.block?.type === 'reasoning' && c.block.text === 'ponder'))
+check('answer part stays a text block', out4b.some(c => c.type === 'block-end' && c.block?.type === 'text' && c.block.text === 'answer'))
+
+console.log('\nimage serialization (inline, per protocol)')
+// A stand-in RequestImages map: one fake attachment with two red bytes.
+const fakeVersion = {
+  attachmentId: 'att_1', mediaType: 'image/png', bytes: 2, width: 1, height: 1,
+  data: new Uint8Array([255, 0, 0]), variantId: 'v1', depth: 'uchar', space: 'srgb', hasAlpha: false,
+}
+const imageRef = { attachmentId: 'att_1', mediaType: 'image/png', bytes: 2, width: 1, height: 1 }
+const images = {
+  versions: new Map([['att_1', fakeVersion]]),
+  handle: () => 'Image att_1; request preview 1x1px.',
+}
+const imageRequest = {
+  provider: 'zzzxin1', model: 'deepseek-v4-flash',
+  messages: [
+    { role: 'user', content: [
+      { type: 'text', text: 'what is this' },
+      { type: 'image', attachment: imageRef },
+    ] },
+  ],
+}
+const openaiImg = serializeRequest(imageRequest, model, provider, images)
+const openaiParts = openaiImg.messages[0].content
+check('openai user content becomes parts', Array.isArray(openaiParts))
+check('openai image part is inline base64', openaiParts[2]?.type === 'image_url'
+  && String(openaiParts[2]?.image_url?.url).startsWith('data:image/png;base64,'), JSON.stringify(openaiParts?.[2]))
+check('openai keeps the text part', openaiParts[0]?.text === 'what is this')
+check('openai writes the handle beside the image', openaiParts[1]?.type === 'text'
+  && String(openaiParts[1]?.text).includes('att_1'))
+const anthropicImg = serializeRequest(imageRequest, undefined, anthropicProvider, images)
+const anthropicParts = anthropicImg.messages[0].content
+check('anthropic image part is base64 source', anthropicParts[2]?.type === 'image'
+  && anthropicParts[2]?.source?.type === 'base64'
+  && typeof anthropicParts[2]?.source?.data === 'string',
+  JSON.stringify(anthropicParts))
+const geminiImg = serializeRequest(imageRequest, undefined, geminiProvider, images)
+const geminiParts = geminiImg.contents[0].parts
+check('gemini image part is inlineData', geminiParts[2]?.inlineData?.mimeType === 'image/png'
+  && typeof geminiParts[2]?.inlineData?.data === 'string',
+  JSON.stringify(geminiParts))
+let refusedImage = false
+try {
+  serializeRequest(imageRequest, model, provider, undefined)
+} catch {
+  refusedImage = true
+}
+check('an unprepared image is REFUSED, not dropped', refusedImage)
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exit(failures === 0 ? 0 : 1)

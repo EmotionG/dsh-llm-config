@@ -13,19 +13,35 @@
  *
  * @module dsh-llm-config/adapter
  */
-import { LlmAdapter, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type ResolvedRetryPolicy, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment';
 import type { ConfigProvider } from './config.ts';
 export declare const PKG = "llm-config";
 /** The live view the adapter reads through; rebuilt whenever config changes. */
 export interface ProviderRegistry {
     get(providerId: string): ConfigProvider | undefined;
     resolveApiKey(provider: ConfigProvider): Promise<string>;
+    /**
+     * The durable attachment service, when mounted. Image input is served only
+     * through it: an image block carries a reference, and the bytes live in the
+     * store. Returns `undefined` when the deployment offers no store, in which
+     * case an image-carrying request is refused with `UNSUPPORTED_CONTENT`.
+     */
+    resolveAttachments(): AttachmentStore | undefined;
 }
 /** One adapter serving one provider route. */
 export declare class ConfigAdapter extends LlmAdapter {
     #private;
     constructor(registry: ProviderRegistry, providerId: string);
     providerInfo(provider: string): LlmProviderInfo;
+    /**
+     * The provider-owned retry policy, captured when the route registers.
+     *
+     * `undefined` falls back to the framework's normal defaults (maxRetries 5),
+     * which is exactly what an unconfigured route should do — so a configured
+     * `retry` is returned verbatim-resolved, and an absent one is left alone.
+     */
+    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;

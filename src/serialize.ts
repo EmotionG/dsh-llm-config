@@ -7,23 +7,61 @@
  * `functionCall`/`functionResponse` for Gemini; the system prompt is a leading
  * message, a top-level `system`, or `systemInstruction`.
  *
+ * Image input: image blocks carry an attachment REFERENCE; the caller resolves
+ * each one through the durable attachment service (`readImageRequest`) into a
+ * `RequestImageAttachment` and hands the map to {@link serializeRequest}. A
+ * request carrying images WITHOUT that map is refused — a half-serializer that
+ * silently drops the image would tell the user it was seen.
+ *
  * @module dsh-llm-config/serialize
  */
 
-import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm'
+import type {
+  ContentBlock,
+  GenerateOptions,
+} from '@deepseek-ai/dsh-llm'
+import { requestImageHandleText } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { ConfigModel, ConfigProvider, ModelEffort } from './config.ts'
 
 /** Prefix for adapter-raised diagnostics. */
 const PKG = 'llm-config'
 
 /**
- * Image blocks carry an attachment REFERENCE, not inline bytes: the provider
- * never receives the image natively. Rather than invent a half-serializer, an
- * adapter that cannot serve an image rejects the request explicitly — the same
- * posture the shipped NewAPI adapter takes.
+ * Prepared request images for one serialization, keyed by attachment id. Built
+ * by the adapter from the durable attachment service; one map serves one
+ * request body.
  */
-export function contentHasImage(blocks: readonly ContentBlock[]): boolean {
-  return blocks.some(b => b.type === 'image')
+export interface RequestImages {
+  readonly versions: ReadonlyMap<AttachmentKey, RequestImageAttachment>
+  /** Model-facing handle text for one image, beside its wire part. */
+  handle(ref: ImageAttachmentRef, version: RequestImageAttachment): string
+}
+
+/** Build the standard {@link RequestImages} view over prepared versions. */
+export function requestImages(versions: ReadonlyMap<AttachmentKey, RequestImageAttachment>): RequestImages {
+  return {
+    versions,
+    handle: (ref, version) => requestImageHandleText(ref, version),
+  }
+}
+
+/** Key an image occurrence resolves its prepared version by. */
+export type AttachmentKey = string
+
+/** Collect every image reference in request order, deduplicated by id. */
+export function collectImageRefs(messages: readonly { content: ContentBlock[] | string }[]): Map<AttachmentKey, ImageAttachmentRef> {
+  const refs = new Map<AttachmentKey, ImageAttachmentRef>()
+  const walk = (blocks: readonly ContentBlock[]): void => {
+    for (const block of blocks) {
+      if (block.type === 'image') refs.set(block.attachment.attachmentId, block.attachment)
+      else if (block.type === 'tool-result') walk(block.content)
+    }
+  }
+  for (const message of messages) {
+    if (typeof message.content !== 'string') walk(message.content)
+  }
+  return refs
 }
 
 /** Concatenate the text blocks of one message. */
@@ -88,11 +126,103 @@ function resolveStop(options: GenerateOptions, model: ConfigModel | undefined): 
   return undefined
 }
 
+/** Canonical base64 of raw bytes, in Node or browser alike. */
+function base64(bytes: Uint8Array): string {
+  let text = ''
+  for (const b of bytes) text += String.fromCharCode(b)
+  // Node 18+ and every modern browser expose btoa on the global.
+  return btoa(text)
+}
+
+/**
+ * Resolve one image block into `[handle-text part, wire image part]`.
+ *
+ * The handle text is model-visible beside the image (it names the attachment
+ * and its request dimensions, the same convention the shipped adapters use);
+ * the wire part comes from the protocol-specific builder. A missing prepared
+ * version — the caller did not resolve this reference — is an error, because
+ * silently omitting an image the user attached is exactly the defect the
+ * old explicit rejection existed to prevent.
+ */
+function imagePartsFor(
+  block: Extract<ContentBlock, { type: 'image' }>,
+  images: RequestImages | undefined,
+  buildPart: (version: RequestImageAttachment) => Record<string, unknown>,
+): Record<string, unknown>[] {
+  if (images === undefined) {
+    throw new Error(`${PKG}: image input was not prepared for this request; `
+      + `the model declares image support but the request carried no resolved attachment`)
+  }
+  const version = images.versions.get(block.attachment.attachmentId)
+  if (version === undefined) {
+    throw new Error(`${PKG}: request image ${block.attachment.attachmentId} was not prepared`)
+  }
+  return [
+    { type: 'text', text: images.handle(block.attachment, version) },
+    buildPart(version),
+  ]
+}
+
+/**
+ * Build the content parts of one user message: text first, then each image as
+ * handle + wire part. Returns `undefined` when the message carries no image,
+ * so the caller keeps the compact string form.
+ */
+function userContentParts(
+  blocks: readonly ContentBlock[],
+  images: RequestImages | undefined,
+  buildPart: (version: RequestImageAttachment) => Record<string, unknown>,
+): Record<string, unknown>[] | undefined {
+  if (!blocks.some(b => b.type === 'image')) return undefined
+  const parts: Record<string, unknown>[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.length > 0) parts.push({ type: 'text', text: block.text })
+    else if (block.type === 'image') parts.push(...imagePartsFor(block, images, buildPart))
+  }
+  return parts.length === 0 ? undefined : parts
+}
+
+/**
+ * Tool-result content as one OpenAI/Anthropic-compatible value: text plus any
+ * nested image parts. Nested images inside tool results are inlined the same
+ * way user images are.
+ */
+function toolResultContent(
+  blocks: readonly ContentBlock[],
+  images: RequestImages | undefined,
+): string | Record<string, unknown>[] {
+  if (!blocks.some(b => b.type === 'image')) return textOf(blocks)
+  const parts: Record<string, unknown>[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.length > 0) parts.push({ type: 'text', text: block.text })
+    else if (block.type === 'image') parts.push(...imagePartsFor(block, images, openAiImagePart))
+  }
+  return parts
+}
+
+/** Tool-result text for protocols whose tool results stay textual (Gemini). */
+function toolResultText(blocks: readonly ContentBlock[], images: RequestImages | undefined): string {
+  if (!blocks.some(b => b.type === 'image')) return textOf(blocks)
+  // Gemini functionResponse carries text; an image inside a tool result is
+  // represented by its handle text only (the same projection the framework's
+  // text-only path applies).
+  const parts = toolResultContent(blocks, images) as Record<string, unknown>[]
+  return parts.filter(p => p.type === 'text').map(p => String(p.text)).join('')
+}
+/** One inline OpenAI-style image part from a prepared request version. */
+function openAiImagePart(version: RequestImageAttachment): Record<string, unknown> {
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${version.mediaType};base64,${base64(version.data)}` },
+  }
+}
+
 /** OpenAI Chat Completions request body. */
 function buildOpenAiChat(
   options: GenerateOptions,
   model: ConfigModel | undefined,
   provider: ConfigProvider,
+  images: RequestImages | undefined,
 ): Record<string, unknown> {
   const messages: Record<string, unknown>[] = []
   if (options.system !== undefined && options.system.length > 0) {
@@ -124,15 +254,14 @@ function buildOpenAiChat(
     const results = blocks.filter(b => b.type === 'tool-result')
     if (results.length > 0) {
       for (const r of results) {
-        messages.push({ role: 'tool', tool_call_id: r.toolCallId, content: textOf(r.content) })
+        messages.push({ role: 'tool', tool_call_id: r.toolCallId, content: toolResultContent(r.content, images) })
       }
       continue
     }
-    const images = blocks.filter(b => b.type === 'image')
-    if (images.length > 0) {
-      throw new Error(`${PKG}: the OpenAI chat serializer does not support image content`)
-    }
-    messages.push({ role: 'user', content: textOf(blocks) })
+    const parts = userContentParts(blocks, images, openAiImagePart)
+    messages.push(parts === undefined
+      ? { role: 'user', content: textOf(blocks) }
+      : { role: 'user', content: parts })
   }
 
   const body: Record<string, unknown> = { model: options.model, messages, stream: true }
@@ -154,11 +283,24 @@ function buildOpenAiChat(
   return body
 }
 
+/** One inline Anthropic image part from a prepared request version. */
+function anthropicImagePart(version: RequestImageAttachment): Record<string, unknown> {
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: version.mediaType,
+      data: base64(version.data),
+    },
+  }
+}
+
 /** Anthropic Messages request body. */
 function buildAnthropic(
   options: GenerateOptions,
   model: ConfigModel | undefined,
   provider: ConfigProvider,
+  images: RequestImages | undefined,
 ): Record<string, unknown> {
   const messages: Record<string, unknown>[] = []
   for (const message of options.messages) {
@@ -173,14 +315,15 @@ function buildAnthropic(
     } else {
       const text = textOf(blocks)
       if (text.length > 0) parts.push({ type: 'text', text })
-      if (blocks.some(b => b.type === 'image')) {
-        throw new Error(`${PKG}: the Anthropic serializer does not support image content`)
+      for (const b of blocks) {
+        if (b.type !== 'image') continue
+        parts.push(...imagePartsFor(b, images, anthropicImagePart))
       }
       for (const r of blocks.filter(b => b.type === 'tool-result')) {
         parts.push({
           type: 'tool_result',
           tool_use_id: r.toolCallId,
-          content: textOf(r.content),
+          content: toolResultContent(r.content, images),
           ...(r.isError === true ? { is_error: true } : {}),
         })
       }
@@ -208,11 +351,22 @@ function buildAnthropic(
   return body
 }
 
+/** One inline Gemini image part from a prepared request version. */
+function geminiImagePart(version: RequestImageAttachment): Record<string, unknown> {
+  return {
+    inlineData: {
+      mimeType: version.mediaType,
+      data: base64(version.data),
+    },
+  }
+}
+
 /** Google Gemini generateContent request body. */
 function buildGemini(
   options: GenerateOptions,
   model: ConfigModel | undefined,
   provider: ConfigProvider,
+  images: RequestImages | undefined,
 ): Record<string, unknown> {
   const contents: Record<string, unknown>[] = []
   for (const message of options.messages) {
@@ -227,11 +381,12 @@ function buildGemini(
     } else {
       const text = textOf(blocks)
       if (text.length > 0) parts.push({ text })
-      if (blocks.some(b => b.type === 'image')) {
-        throw new Error(`${PKG}: the Gemini serializer does not support image content`)
+      for (const b of blocks) {
+        if (b.type !== 'image') continue
+        parts.push(...imagePartsFor(b, images, geminiImagePart))
       }
       for (const r of blocks.filter(b => b.type === 'tool-result')) {
-        parts.push({ functionResponse: { name: 'tool', response: { result: textOf(r.content) } } })
+        parts.push({ functionResponse: { name: 'tool', response: { result: toolResultText(r.content, images) } } })
       }
     }
     if (parts.length > 0) contents.push({ role: message.role === 'assistant' ? 'model' : 'user', parts })
@@ -270,11 +425,12 @@ export function serializeRequest(
   options: GenerateOptions,
   model: ConfigModel | undefined,
   provider: ConfigProvider,
+  images?: RequestImages,
 ): Record<string, unknown> {
   const protocol = model?.protocol ?? provider.protocol
-  if (protocol === 'anthropic-messages') return buildAnthropic(options, model, provider)
-  if (protocol === 'google-gemini') return buildGemini(options, model, provider)
-  return buildOpenAiChat(options, model, provider)
+  if (protocol === 'anthropic-messages') return buildAnthropic(options, model, provider, images)
+  if (protocol === 'google-gemini') return buildGemini(options, model, provider, images)
+  return buildOpenAiChat(options, model, provider, images)
 }
 
 /** The request URL for one exact provider/model pair. */
