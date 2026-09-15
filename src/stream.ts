@@ -53,6 +53,13 @@ export interface Translator {
   finish(): StreamChunk[]
   /** Whether any tool call was seen; a tool-carrying turn is never empty. */
   hasToolCalls(): boolean
+  /**
+   * Whether the protocol's TERMINAL event arrived (`[DONE]`, a finish
+   * reason, a closing message event). A stream that ends without one was
+   * cut off mid-flight: its half-streamed content must not be committed as
+   * a successful completion.
+   */
+  completed(): boolean
 }
 
 interface ToolSlot {
@@ -106,11 +113,16 @@ function openAiTranslator(): Translator {
   let reasoningText = ''
   let textAt: number | null = null
   let textText = ''
+  let sawDone = false
   return {
     hasToolCalls: () => calls.size > 0,
+    completed: () => sawDone || finished !== null,
     push(payload) {
       const chunks: StreamChunk[] = []
-      if (payload === '[DONE]') return { chunks, done: true }
+      if (payload === '[DONE]') {
+        sawDone = true
+        return { chunks, done: true }
+      }
       let event: Record<string, unknown>
       try {
         event = JSON.parse(payload) as Record<string, unknown>
@@ -223,8 +235,10 @@ function anthropicTranslator(): Translator {
   const calls = new Map<number, ToolSlot>()
   let usage: Record<string, unknown> | null = null
   let stopReason: string | null = null
+  let sawTerminal = false
   return {
     hasToolCalls: () => calls.size > 0,
+    completed: () => sawTerminal,
     push(payload) {
       const chunks: StreamChunk[] = []
       let event: Record<string, unknown>
@@ -283,6 +297,9 @@ function anthropicTranslator(): Translator {
         }
         const delta = event.delta as Record<string, unknown> | undefined
         if (delta !== undefined && typeof delta.stop_reason === 'string') stopReason = delta.stop_reason
+        sawTerminal = true
+      } else if (type === 'message_stop') {
+        sawTerminal = true
       }
       return { chunks, done: false }
     },
@@ -343,6 +360,7 @@ function geminiTranslator(): Translator {
   let textText = ''
   return {
     hasToolCalls: () => calls.size > 0,
+    completed: () => geminiFinish !== null,
     push(payload) {
       const chunks: StreamChunk[] = []
       let event: Record<string, unknown>

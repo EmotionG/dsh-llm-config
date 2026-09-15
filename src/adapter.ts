@@ -220,9 +220,12 @@ export class ConfigAdapter extends LlmAdapter {
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
       })
     } catch (error) {
+      // Caller cancellation keeps its own semantics (aborted, never retried);
+      // every other connect-phase failure — refused, DNS, TLS, reset — is a
+      // TRANSPORT failure, which the default retry policy retries.
       if (options.signal?.aborted === true) throw error
-      throw new Error(`${PKG}: request to ${entry.baseURL} failed: `
-        + `${error instanceof Error ? error.message : String(error)}`)
+      throw new LlmError(`${PKG}: request to ${entry.baseURL} failed: `
+        + `${error instanceof Error ? error.message : String(error)}`, 'TRANSPORT')
     }
 
     if (!response.ok) {
@@ -233,23 +236,47 @@ export class ConfigAdapter extends LlmAdapter {
         parsed = undefined
       }
       const message = errorMessageOf(parsed, 'request rejected')
-      throw new Error(`${PKG}: ${entry.displayName} (${entry.protocol}) returned HTTP `
-        + `${response.status} [${httpErrorCode(response.status, message)}]: ${message}`)
+      // Carry the stable code on the error itself, so the framework's failure
+      // normalization routes on it (RATE_LIMIT / SERVER / QUOTA / …) instead
+      // of collapsing every rejection into UNKNOWN, which never retries.
+      throw new LlmError(`${PKG}: ${entry.displayName} (${entry.protocol}) returned HTTP `
+        + `${response.status} [${httpErrorCode(response.status, message)}]: ${message}`,
+      httpErrorCode(response.status, message))
     }
     if (response.body === null) {
-      throw new Error(`${PKG}: ${entry.displayName} returned an empty response body`)
+      throw new LlmError(`${PKG}: ${entry.displayName} returned an empty response body`, 'EMPTY_RESPONSE')
     }
 
     const protocol = model?.protocol ?? entry.protocol
     const translator = createTranslator(protocol)
     let sawVisibleText = false
-    for await (const payload of sseEvents(response.body as ReadableStream<Uint8Array>, options.signal)) {
-      const result = translator.push(payload)
-      for (const chunk of result.chunks) {
-        if (chunk.type === 'text-delta' && chunk.text.trim().length > 0) sawVisibleText = true
-        yield chunk
+    try {
+      for await (const payload of sseEvents(response.body as ReadableStream<Uint8Array>, options.signal)) {
+        const result = translator.push(payload)
+        for (const chunk of result.chunks) {
+          if (chunk.type === 'text-delta' && chunk.text.trim().length > 0) sawVisibleText = true
+          yield chunk
+        }
+        if (result.done) break
       }
-      if (result.done) break
+    } catch (error) {
+      // Mid-stream truncation (connection reset while reading the SSE body).
+      // Caller cancellation keeps aborted semantics; anything else is a
+      // TRANSPORT failure so the configured retry count governs it — without
+      // this the raw read error would normalize to UNKNOWN and never retry.
+      if (options.signal?.aborted === true) throw error
+      throw new LlmError(`${PKG}: ${entry.displayName} stream interrupted: `
+        + `${error instanceof Error ? error.message : String(error)}`, 'TRANSPORT')
+    }
+    if (options.signal?.aborted === true) return
+    // The stream ended without its protocol terminal event ([DONE] sentinel,
+    // a finish reason, a closing message event): the gateway cut the stream
+    // mid-flight. Committing the half-streamed blocks would present a
+    // truncated reply as a successful completion; fail as TRANSPORT instead
+    // so the retry policy replays the whole request.
+    if (!translator.completed()) {
+      throw new LlmError(`${PKG}: ${entry.displayName} closed the stream before completion `
+        + `(no terminal event received)`, 'TRANSPORT')
     }
     for (const chunk of translator.finish()) {
       if (chunk.type === 'block-end' && chunk.block.type === 'text' && chunk.block.text.trim().length > 0) {

@@ -20,6 +20,13 @@ export interface Translator {
     finish(): StreamChunk[];
     /** Whether any tool call was seen; a tool-carrying turn is never empty. */
     hasToolCalls(): boolean;
+    /**
+     * Whether the protocol's TERMINAL event arrived (`[DONE]`, a finish
+     * reason, a closing message event). A stream that ends without one was
+     * cut off mid-flight: its half-streamed content must not be committed as
+     * a successful completion.
+     */
+    completed(): boolean;
 }
 /** Build the translator for one protocol. */
 export declare function createTranslator(protocol: ProtocolId): Translator;
