@@ -340,10 +340,15 @@ function Field(props: {
   label: string
   hint?: string
   grow?: boolean
+  /** Extra class for layout modifiers (e.g. a fixed-width select). */
+  className?: string
   children: React.ReactNode
 }): JSX.Element {
+  const classes = ['llmcfg-field']
+  if (props.grow === true) classes.push('llmcfg-field--grow')
+  if (props.className !== undefined) classes.push(props.className)
   return (
-    <label className={props.grow === true ? 'llmcfg-field llmcfg-field--grow' : 'llmcfg-field'} title={props.hint}>
+    <label className={classes.join(' ')} title={props.hint}>
       <span className="llmcfg-label">{props.label}</span>
       {props.children}
     </label>
@@ -354,10 +359,41 @@ function Field(props: {
 function modelSummary(m: ModelRow): string {
   const bits: string[] = []
   if (m.name.trim().length > 0 && m.name.trim() !== m.id.trim()) bits.push(m.name.trim())
-  if (m.contextWindow.trim().length > 0) bits.push(m.contextWindow.trim())
-  if (m.maxTokens.trim().length > 0) bits.push(`out ${m.maxTokens.trim()}`)
+  if (m.contextWindow.trim().length > 0) bits.push(fmtCompact(m.contextWindow.trim()))
+  if (m.maxTokens.trim().length > 0) bits.push(`out ${fmtCompact(m.maxTokens.trim())}`)
   if (m.inputModalities.includes('image')) bits.push('image')
-  if (m.reasoningEfforts.trim().length > 0) bits.push(m.reasoningEfforts.trim())
+  // The reasoning-effort vocabulary is long and lives in the expanded form;
+  // keeping it out of the collapsed summary keeps the toolbar on one line.
+  return bits.join(' · ')
+}
+
+/**
+ * Compact rendering of a large numeric fact for the toolbar and catalog
+ * pickers: 1000000 reads as 1000k, 1048576 as 1.0M, and anything already
+ * non-numeric is passed through untouched.
+ */
+function fmtCompact(raw: string): string {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || raw.trim().length === 0) return raw
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+  }
+  if (n >= 1000 && Number.isInteger(n / 1000)) return `${n / 1000}k`
+  return raw
+}
+
+/** The catalog option line: source, then the facts that differ. */
+function catalogOptionLabel(c: CatalogCandidate): string {
+  const bits = [c.providerName ?? c.provider]
+  const cw = c.facts.contextWindow
+  const mt = c.facts.maxTokens
+  if (cw !== undefined || mt !== undefined) {
+    bits.push([cw === undefined ? '—' : fmtCompact(String(cw)),
+      mt === undefined ? '—' : fmtCompact(String(mt))].join(' / '))
+  }
+  if (c.facts.inputModalities !== undefined) bits.push(c.facts.inputModalities.join('+'))
+  if (c.facts.reasoningEfforts !== undefined) bits.push(c.facts.reasoningEfforts.join('/'))
   return bits.join(' · ')
 }
 
@@ -811,7 +847,7 @@ export function ModelProvidersSection(props: InjectedProps): JSX.Element {
               onChange={e => patchRow(pi, { modelExcludePatterns: e.target.value })} />
           </Field>
           <div className="llmcfg-row">
-            <Field label={t('retryMode')}>
+            <Field label={t('retryMode')} className="llmcfg-field--fixed">
               <select className="llmcfg-select" value={row.retryMode}
                 onChange={e => patchRow(pi, { retryMode: e.target.value })}>
                 <option value="normal">{t('retryModeNormal')}</option>
@@ -876,14 +912,7 @@ export function ModelProvidersSection(props: InjectedProps): JSX.Element {
                     >
                       {list.map((c, ci) => (
                         <option key={`${c.provider}-${ci}`} value={String(ci)}>
-                          {`${c.providerName ?? c.provider}`
-                            + ` · ${c.facts.contextWindow ?? '—'}/${c.facts.maxTokens ?? '—'}`
-                            + (c.facts.inputModalities !== undefined
-                              ? ` · ${c.facts.inputModalities.join('+')}`
-                              : '')
-                            + (c.facts.reasoningEfforts !== undefined
-                              ? ` · ${c.facts.reasoningEfforts.join('/')}`
-                              : '')}
+                          {catalogOptionLabel(c)}
                         </option>
                       ))}
                     </select>
