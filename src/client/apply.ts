@@ -42,7 +42,7 @@ const RPC_CHANNEL = '/llm-config'
  * redefines for the dark theme, so one rule set renders in both.
  */
 const SECTION_CSS = `
-.llmcfg-root { display: flex; flex-direction: column; gap: 10px; margin: 0; }
+.llmcfg-root { display: flex; flex-direction: column; gap: 10px; margin: 0; min-width: 0; }
 .llmcfg-root p { margin: 0; }
 .llmcfg-root h1, .llmcfg-root h2, .llmcfg-root h3, .llmcfg-root h4 { margin: 0; }
 .llmcfg-intro { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 17px; max-width: 52em; }
@@ -79,6 +79,9 @@ const SECTION_CSS = `
 .llmcfg-card:not(:has(.llmcfg-cardbody)) .llmcfg-cardhead { border-bottom: 0; }
 .llmcfg-cardbody {
   padding: 8px; display: flex; flex-direction: column; gap: 8px;
+  /* Nested rows (sections, model list) may contain wrapping bars and long
+     unbreakable ids; clamp them so nothing widens the card from inside. */
+  min-width: 0; max-width: 100%;
 }
 .llmcfg-sec {
   display: flex; flex-direction: column; gap: 8px;
@@ -86,6 +89,7 @@ const SECTION_CSS = `
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 7px;
   background: var(--dsw-alias-bg-layer-1);
+  min-width: 0; max-width: 100%;
 }
 .llmcfg-sectitle {
   font-weight: 600; font-size: 11px; line-height: 14px;
@@ -137,18 +141,24 @@ const SECTION_CSS = `
 }
 .llmcfg-empty-title { font-weight: 600; color: var(--dsw-alias-label-secondary); }
 .llmcfg-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; user-select: none; }
-.llmcfg-modelist { display: flex; flex-direction: column; gap: 4px; }
+.llmcfg-modelist { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .llmcfg-modelrow {
   display: flex; flex-direction: column; gap: 0;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 0;
   background: var(--dsw-alias-bg-layer-0, transparent);
+  /* A model row must never push content past its card: the inner bar wraps
+     instead of stretching the row wider than the section it lives in. */
+  min-width: 0; max-width: 100%; overflow: hidden;
 }
 .llmcfg-modelrow[data-open="true"] { background: var(--dsw-alias-bg-layer-1); }
 .llmcfg-modelbar {
   width: 100%; padding: 4px 6px; gap: 6px;
-  align-items: center; flex-wrap: nowrap;
+  align-items: center;
+  /* Wrap, never overflow: two buttons and the summary sit beside a growing
+     id input; at narrow widths the row folds instead of escaping the card. */
+  flex-wrap: wrap;
 }
-.llmcfg-modelid { flex: 1 1 auto; min-width: 140px; max-width: none; height: 28px; }
+.llmcfg-modelid { flex: 1 1 140px; min-width: 120px; max-width: none; height: 28px; }
 .llmcfg-modelsum { flex: 1 1 120px; min-width: 0; }
 .llmcfg-modelbody {
   display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 10px; width: 100%;
