@@ -131,6 +131,7 @@ const SECTION_CSS = `
 .llmcfg-note { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
 .llmcfg-banner {
   font-size: 12px; line-height: 16px; padding: 6px 9px; border-radius: 6px;
+  min-width: 0; max-width: 100%; overflow-wrap: anywhere;
 }
 .llmcfg-warn { color: var(--dsw-alias-state-warning-primary); }
 .llmcfg-error { color: var(--dsw-alias-state-error-primary); white-space: pre-wrap; }
@@ -188,13 +189,14 @@ const SECTION_CSS = `
   border: 1px dashed var(--dsw-alias-border-l2); border-radius: 6px; padding: 8px 9px;
   display: flex; flex-direction: column; gap: 6px;
   background: var(--dsw-alias-bg-layer-0, transparent);
+  min-width: 0; max-width: 100%;
 }
 .llmcfg-keybar {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   min-height: 28px;
 }
-.llmcfg-keyinput { flex: 1 1 180px; min-width: 140px; }
-.llmcfg-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.llmcfg-keyinput { flex: 1 1 180px; min-width: 140px; max-width: 100%; }
+.llmcfg-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .llmcfg-toolbar .llmcfg-button { padding: 5px 8px; min-height: 28px; }
 .llmcfg-catalogrow {
   display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr);
@@ -207,6 +209,7 @@ const SECTION_CSS = `
 .llmcfg-details {
   border-top: 1px dashed var(--dsw-alias-border-l2);
   padding-top: 6px;
+  min-width: 0;
 }
 .llmcfg-details > summary {
   cursor: pointer; list-style: none; font-size: 12px; color: var(--dsw-alias-label-secondary);
@@ -215,6 +218,9 @@ const SECTION_CSS = `
 .llmcfg-details > summary::-webkit-details-marker { display: none; }
 .llmcfg-details[open] > summary { margin-bottom: 6px; }
 .llmcfg-details[open] { display: flex; flex-direction: column; gap: 8px; }
+/* The catalog chooser's select rides a grid track of 0..1fr, so it never
+   widens its column; the details block and its rows stay clamped too. */
+.llmcfg-details .llmcfg-select { max-width: 100%; }
 `
 
 /** Required services (cordis fiber inject). */
