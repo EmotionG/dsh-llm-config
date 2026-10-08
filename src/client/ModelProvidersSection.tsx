@@ -92,7 +92,14 @@ export interface DiscoveredModel {
   maxTokens?: number
 }
 
-/** The namespace this page owns. */
+/**
+ * The settings namespace this page owns.
+ *
+ * Under the 0.2 settings model a namespace is the plugin's PROFILE ENTRY ID,
+ * as returned by `settings.describe()`; it is what `settings.mutate` writes to
+ * and what `llm.discoverModels` keys its discovery offer by. This value must
+ * therefore equal the `id` this package's `cordis.patch.yml` inserts.
+ */
 const NS = 'llm-config'
 
 interface ModelRow {
@@ -455,7 +462,17 @@ export function ModelProvidersSection(props: InjectedProps): JSX.Element {
       }
       // Prefer the USER layer: the base layer is the composition entry, so a
       // page echoing `value` would show the base before the user ever saved.
-      const value = (section.user ?? section.value ?? {}) as Record<string, unknown>
+      //
+      // Under the 0.2 settings model `user` is ALWAYS present and is a
+      // projected object — a field the user never overrode is simply absent
+      // from it, rather than the whole layer being omitted (which is what
+      // 0.1.x did). Selecting the layer on its presence alone would therefore
+      // read an empty `user` and render an empty page, so the layer is chosen
+      // on whether it actually declares `providers`.
+      const userLayer = section.user as Record<string, unknown> | undefined
+      const value = (userLayer !== undefined && userLayer.providers !== undefined
+        ? userLayer
+        : (section.value ?? {})) as Record<string, unknown>
       setRevision(typeof section.revision === 'number' ? section.revision : undefined)
       const raw = value.providers
       const list: unknown[] = Array.isArray(raw)

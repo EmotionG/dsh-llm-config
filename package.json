@@ -1,7 +1,7 @@
 {
   "name": "dsh-llm-config",
-  "version": "0.1.0",
-  "description": "Multi-provider LLM configuration for the DeepSeek Harness LLM seam: declare any number of providers, each with its own endpoint, credential and per-model parameters, across the OpenAI Chat, OpenAI Responses, Anthropic Messages and Google Gemini wire formats.",
+  "version": "0.2.0",
+  "description": "Multi-provider LLM configuration for the DeepSeek Harness LLM seam (DSH 0.2.0): declare any number of providers, each with its own endpoint, credential and per-model parameters, across the OpenAI Chat, OpenAI Responses, Anthropic Messages and Google Gemini wire formats.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -39,7 +39,8 @@
     "build:host": "tsc -p tsconfig.json",
     "build:client": "node scripts/build-client.mjs || node scripts/build-client-sandbox.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "npm run build && node test/smoke.mjs && node test/client.mjs && node test/adapter.mjs && node test/mount.mjs && node test/sync.mjs && node test/channel.mjs && node test/rpc.mjs && node test/enrich.mjs"
+    "check:market": "node scripts/check-market-compat.mjs",
+    "test": "npm run build && node test/smoke.mjs && node test/client.mjs && node test/adapter.mjs && node test/mount.mjs && node test/sync.mjs && node test/channel.mjs && node test/rpc.mjs && node test/enrich.mjs && node test/runtime.mjs && node test/compat.mjs && node test/responses.mjs"
   },
   "keywords": [
     "dsh",
@@ -52,31 +53,41 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": ">=0.1.5-rc.1 <0.1.6",
-    "@deepseek-ai/dsh-credentials": ">=0.1.5-rc.1 <0.1.6",
-    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1 <0.1.6",
-    "@deepseek-ai/dsh-settings": ">=0.1.5-rc.1 <0.1.6",
-    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "~1.0.5",
+    "@deepseek-ai/dsh-attachment": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-launch-environment": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-settings": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/schemastery": "~3.18.4",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis-plugin-loader": {
+      "optional": true
+    }
   },
   "dependencies": {
     "undici": "^7"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-attachment": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-credentials": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-settings": "0.1.5-rc.2",
-    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.5",
+    "@deepseek-ai/cosmokit": "^1.8.5",
+    "@deepseek-ai/dsh-api-remotes": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-credentials": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-launch-environment": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^22.20.2",
     "@types/react": "^18.2.0",
     "esbuild": "^0.25.0",

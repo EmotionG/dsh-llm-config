@@ -1,12 +1,16 @@
 /**
  * Does a settings change actually reach the LLM registry at runtime?
  *
- * The plugin mounts with an EMPTY composition entry and learns the saved
- * configuration through `installSection`'s `setSource`/`onChange`. If that
- * chain does not fire, the route is never registered and DSH's picker stays
- * empty even though the settings file is correct.
+ * Under the 0.2 settings model the plugin's profile entry IS the namespace:
+ * `providers` is declared `.volatile()`, the Loader commits a fresh snapshot
+ * into that reference on every settings edit and then emits
+ * `loader/volatile-update` on the owning fiber. This test drives exactly that
+ * pair — parse the new section through the plugin's own `Config` schema, commit
+ * it with `updateVolatile`, emit the event — so a missing listener or a
+ * captured-once config is caught here instead of in the GUI.
  */
 import { Context } from '@deepseek-ai/cordis'
+import { updateVolatile } from '@deepseek-ai/cosmokit'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import * as plugin from '../lib/index.js'
 
@@ -30,42 +34,60 @@ const EMPTY = { providers: {} }
 const app = new Context()
 const llm = new LlmRuntime(app)
 
-// A stand-in settings provider that behaves like dsh-settings: register()
-// resolves base+user, and installSection() hands the consumer a source thunk.
-let currentValue = SAVED
-const watchers = []
-const settings = {
-  register(ns, schema, options) {
-    const scope = {
-      get: () => currentValue,
-      watch: (fn) => { watchers.push(fn); return () => {} },
-      update: async () => {},
-    }
-    return scope
+// A stand-in settings service exposing only what the 0.2 plugin asks of it:
+// the automatic-page policy is switched off for this instance.
+let configuredWith = null
+app.provide('settings', {
+  configure(presentation, owner) {
+    configuredWith = { presentation, owner }
+    return () => {}
   },
-  installSection(owner, ns, schema, entry, hooks) {
-    const scope = this.register(ns, schema, { base: entry })
-    hooks.setSource(() => scope.get())
-    hooks.onChange()
-    scope.watch(() => hooks.onChange())
+})
+
+// The Loader parses raw config through the plugin's exported schema; capture
+// the parsed object (and the owning context) so the test can commit into the
+// SAME volatile reference the plugin reads.
+let mounted = null
+const wrapped = {
+  Config: plugin.Config,
+  inject: plugin.inject,
+  apply(ctx, config) {
+    mounted = { ctx, config }
+    return plugin.apply(ctx, config)
   },
 }
-app.provide('settings', settings)
+
+/** Commit one raw section the way the Loader does on a settings edit. */
+function commit(section) {
+  updateVolatile(mounted.config.providers, plugin.Config(section).providers)
+  mounted.ctx.emit('loader/volatile-update', [['providers']])
+}
 
 console.log('mount with an EMPTY entry, as the profile loader does')
-let mounted = false
 try {
-  await app.plugin(plugin, EMPTY)
-  mounted = true
+  await app.plugin(wrapped, EMPTY)
   check('mounted', true)
 } catch (error) {
   check('mounted', false, error.message)
 }
 
-if (mounted) {
+if (mounted !== null) {
+  check('the entry config exposes a volatile providers reference',
+    typeof mounted.config.providers?.get === 'function')
+  check('the automatic settings page is switched off for this entry',
+    configuredWith?.presentation?.auto === false,
+    JSON.stringify(configuredWith?.presentation))
+  check('the policy is bound to the plugin fiber, not the injected child',
+    configuredWith?.owner !== undefined && configuredWith.owner === mounted.ctx.fiber)
+
+  check('an empty entry registers no route', llm.listProviders().length === 0,
+    JSON.stringify(llm.listProviders().map(p => p.id)))
+
+  console.log('\na committed settings section registers its routes')
+  commit(SAVED)
   const after = llm.listProviders()
-  check('a SAVED provider registers even though the entry was empty',
-    after.some(p => p.id === 'zzzxin1'), JSON.stringify(after.map(p => p.id)))
+  check('the saved provider registers', after.some(p => p.id === 'zzzxin1'),
+    JSON.stringify(after.map(p => p.id)))
 
   if (after.some(p => p.id === 'zzzxin1')) {
     const models = await llm.listModels('zzzxin1')
@@ -73,7 +95,7 @@ if (mounted) {
   }
 
   console.log('\na later settings change re-syncs the registry')
-  currentValue = {
+  commit({
     providers: {
       zzzxin1: SAVED.providers.zzzxin1,
       second: {
@@ -81,18 +103,20 @@ if (mounted) {
         protocol: 'openai-chat', models: [],
       },
     },
-  }
-  // `watch` invokes callbacks ASYNCHRONOUSLY, so drain the microtask queue.
-  for (const fn of watchers) await fn()
-  await new Promise(resolve => setTimeout(resolve, 0))
+  })
   const grown = llm.listProviders()
   check('the newly added provider registers', grown.some(p => p.id === 'second'),
     JSON.stringify(grown.map(p => p.id)))
 
   console.log('\nremoving a provider withdraws its route')
-  currentValue = { providers: { second: currentValue.providers.second } }
-  for (const fn of watchers) await fn()
-  await new Promise(resolve => setTimeout(resolve, 0))
+  commit({
+    providers: {
+      second: {
+        id: 'second', enabled: true, baseURL: 'https://second.example/v1',
+        protocol: 'openai-chat', models: [],
+      },
+    },
+  })
   const shrunk = llm.listProviders()
   check('the removed provider is gone', !shrunk.some(p => p.id === 'zzzxin1'),
     JSON.stringify(shrunk.map(p => p.id)))
@@ -100,16 +124,14 @@ if (mounted) {
     JSON.stringify(shrunk.map(p => p.id)))
 
   console.log('\na retry-policy change re-registers the route (the policy is captured at registration)')
-  currentValue = {
+  commit({
     providers: {
       second: {
-        ...currentValue.providers.second,
-        retry: 9,
+        id: 'second', enabled: true, baseURL: 'https://second.example/v1',
+        protocol: 'openai-chat', models: [], retry: 9,
       },
     },
-  }
-  for (const fn of watchers) await fn()
-  await new Promise(resolve => setTimeout(resolve, 0))
+  })
   check('the route survives the policy change',
     llm.listProviders().some(p => p.id === 'second'),
     JSON.stringify(llm.listProviders().map(p => p.id)))
@@ -118,17 +140,39 @@ if (mounted) {
     JSON.stringify(policy))
 
   console.log('\nan unconfigured route keeps the framework default policy')
-  currentValue = {
+  commit({
     providers: {
-      second: { ...currentValue.providers.second, retry: undefined },
+      second: {
+        id: 'second', enabled: true, baseURL: 'https://second.example/v1',
+        protocol: 'openai-chat', models: [], retry: undefined,
+      },
     },
-  }
-  for (const fn of watchers) await fn()
-  await new Promise(resolve => setTimeout(resolve, 0))
+  })
   const defaultPolicy = llm.providerRetryPolicy('second')
   check('the framework default is normal/5',
     defaultPolicy.mode === 'normal' && defaultPolicy.maxRetries === 5,
     JSON.stringify(defaultPolicy))
+
+  console.log('\na DISABLED provider withdraws its route but stays declared')
+  commit({
+    providers: {
+      second: {
+        id: 'second', enabled: false, baseURL: 'https://second.example/v1',
+        protocol: 'openai-chat', models: [],
+      },
+    },
+  })
+  check('the disabled route is gone', !llm.listProviders().some(p => p.id === 'second'),
+    JSON.stringify(llm.listProviders().map(p => p.id)))
+  check('but it is still offered as a configurable provider',
+    llm.listConfigurableProviders().some(e => e.provider === 'second'),
+    JSON.stringify(llm.listConfigurableProviders().map(e => e.provider)))
+
+  console.log('\nan invalid committed section is ignored, not fatal')
+  commit({ providers: { broken: { id: 'broken', baseURL: 'not-a-url' } } })
+  check('the bad section registers nothing',
+    !llm.listProviders().some(p => p.id === 'broken'),
+    JSON.stringify(llm.listProviders().map(p => p.id)))
 }
 
 console.log(`\n${failures === 0 ? 'ALL SYNC CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)

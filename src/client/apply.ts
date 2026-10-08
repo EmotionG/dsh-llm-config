@@ -21,18 +21,23 @@ import { ModelProvidersSection, type InjectedProps } from './ModelProvidersSecti
 import { en, zh } from './locale.ts'
 
 /**
- * Two DIFFERENT names, and they must not be conflated:
+ * Three DIFFERENT names, and they must not be conflated:
  *
- * - `SETTINGS_NS` is the settings namespace and the copy namespace the shell
- *   looks up. Settings namespaces are conventionally dotted, so this one is
- *   `settings.llm-config`.
+ * - `COPY_NS` is the copy (locale) namespace the shell looks up through the
+ *   slot's `locale` option. Copy namespaces are conventionally dotted, so this
+ *   one is `settings.llm-config`.
  * - `RPC_CHANNEL` is the Connection RPC channel the host registered. It is an
  *   absolute HTTP-ish path, so it must match the host's channel exactly.
+ * - The SETTINGS namespace is not named here at all: under the 0.2 settings
+ *   model it is the plugin's PROFILE ENTRY ID (`llm-config`, pinned by this
+ *   package's `cordis.patch.yml`), and it is the string the Models page passes
+ *   to `remote.settings.mutate` / `remote.llm.discoverModels`. It is declared
+ *   next to those calls in `ModelProvidersSection.tsx`.
  *
- * Reusing one constant for both makes the browser POST to a channel nobody
+ * Reusing one constant across these makes the browser POST to a channel nobody
  * registered, and the request falls through to the web server as a 405.
  */
-const SETTINGS_NS = 'settings.llm-config'
+const COPY_NS = 'settings.llm-config'
 const RPC_CHANNEL = '/llm-config'
 
 /**
@@ -256,7 +261,7 @@ export const inject = [
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'llm-config: copy dictionaries')
+  ctx.effect(() => ctx.locale.register(COPY_NS, { zh, en }), 'llm-config: copy dictionaries')
 
   // Fiber-scoped styles: removed with the plugin, so a reload swaps them cleanly.
   if (typeof document !== 'undefined') {
@@ -268,7 +273,7 @@ export function apply(ctx: ClientContext): void {
     }, 'llm-config: section styles')
   }
 
-  const t = ctx.locale.bind(SETTINGS_NS)
+  const t = ctx.locale.bind(COPY_NS)
   // The plugin's own host RPC channel, for the models.dev lookup (a browser
   // fetch to models.dev would be a cross-origin call).
   const connection = ctx.get('connection') as ConnectionHandle
@@ -293,7 +298,7 @@ export function apply(ctx: ClientContext): void {
     id: 'llm-config',
     order: 60,
     label: () => t('nav'),
-    locale: SETTINGS_NS,
+    locale: COPY_NS,
     inject: injected,
   }, ModelProvidersSection))
 }

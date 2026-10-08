@@ -135,6 +135,8 @@ check('tools mapped to functions', (() => {
 })())
 
 console.log('\nserialization: tool-call replay differs per protocol')
+// 0.2 message model: a tool result is a first-class `tool` ROLE message, not a
+// `tool-result` content block nested inside a user message.
 const toolHistory = {
   provider: 'zzzxin1', model: 'm',
   messages: [
@@ -142,7 +144,7 @@ const toolHistory = {
       { type: 'text', text: 'calling' },
       { type: 'tool-call', id: 'call_1', name: 'read', arguments: '{"p":"/x"}' },
     ] },
-    { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] }] },
+    { role: 'tool', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] },
   ],
 }
 const oa = serializeRequest(toolHistory, model, provider)
@@ -155,8 +157,29 @@ const anthropicProvider = resolveConfig({
 const an = serializeRequest(toolHistory, undefined, anthropicProvider)
 check('anthropic emits tool_use part', an.messages[0].content[1].type === 'tool_use')
 check('anthropic emits tool_result part', an.messages[1].content[0].type === 'tool_result')
+check('anthropic tool_result is a USER message', an.messages[1].role === 'user')
 check('anthropic max_tokens present', typeof an.max_tokens === 'number')
 check('anthropic system is top-level', serializeRequest({ ...toolHistory, system: 'sys' }, undefined, anthropicProvider).system === 'sys')
+
+// Consecutive tool results answering one assistant turn belong to ONE user
+// message on the Anthropic wire; they must not become one message each.
+const parallelHistory = {
+  provider: 'zzzxin1', model: 'm',
+  messages: [
+    { role: 'assistant', content: [
+      { type: 'tool-call', id: 'c1', name: 'read', arguments: '{}' },
+      { type: 'tool-call', id: 'c2', name: 'write', arguments: '{}' },
+    ] },
+    { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'a' }] },
+    { role: 'tool', toolCallId: 'c2', content: [{ type: 'text', text: 'b' }], isError: true },
+  ],
+}
+const merged = serializeRequest(parallelHistory, undefined, anthropicProvider)
+check('anthropic merges parallel tool results into one user message',
+  merged.messages.length === 2 && merged.messages[1].content.length === 2,
+  JSON.stringify(merged.messages.map(m => m.role)))
+check('anthropic carries is_error on a failed tool result',
+  merged.messages[1].content[1].is_error === true)
 
 const geminiProvider = resolveConfig({
   providers: { g: { id: 'g', baseURL: 'https://g.example/v1', protocol: 'google-gemini' } },
@@ -166,6 +189,48 @@ check('gemini uses contents', Array.isArray(gm.contents))
 check('gemini assistant role is model', gm.contents[0].role === 'model')
 check('gemini emits functionCall', gm.contents[0].parts[1].functionCall.name === 'read')
 check('gemini emits functionResponse', gm.contents[1].parts[0].functionResponse !== undefined)
+check('gemini names the function it answers, not the call id',
+  gm.contents[1].parts[0].functionResponse.name === 'read',
+  gm.contents[1].parts[0].functionResponse.name)
+
+console.log('\nserialization: 0.2 message roles')
+// A loop-built request carries the system prompt as the LEADING system message.
+const leadingSystem = {
+  provider: 'zzzxin1', model: 'm',
+  messages: [
+    { role: 'system', content: [{ type: 'text', text: 'be brief' }] },
+    { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+  ],
+}
+const ls = serializeRequest(leadingSystem, model, provider)
+check('a leading system message becomes the provider system slot',
+  ls.messages[0].role === 'system' && ls.messages[0].content === 'be brief',
+  JSON.stringify(ls.messages))
+check('the leading system message is not replayed as user text',
+  ls.messages.length === 2 && ls.messages[1].role === 'user')
+check('gemini folds the leading system message into systemInstruction',
+  serializeRequest(leadingSystem, undefined, geminiProvider).systemInstruction?.parts?.[0]?.text === 'be brief')
+check('anthropic folds the leading system message into the top-level system',
+  serializeRequest(leadingSystem, undefined, anthropicProvider).system === 'be brief')
+
+// Developer messages carry tool-declaration updates no wire format here can
+// express; replaying them as user text would corrupt the conversation.
+const developerHistory = {
+  provider: 'zzzxin1', model: 'm',
+  messages: [
+    { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    { role: 'developer', content: [{ type: 'tool-addition', toolName: 'read' }] },
+  ],
+}
+let developerRefusal
+try {
+  serializeRequest(developerHistory, model, provider)
+} catch (error) {
+  developerRefusal = error
+}
+check('a developer message is refused with UNSUPPORTED_CONTENT',
+  developerRefusal?.code === 'UNSUPPORTED_CONTENT',
+  JSON.stringify(developerRefusal?.code ?? developerRefusal?.message))
 
 console.log('\nreasoning effort adapts per model')
 const k3 = good.providers[0].models[1]

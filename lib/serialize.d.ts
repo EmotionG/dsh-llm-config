@@ -32,9 +32,21 @@ export interface RequestImages {
 export declare function requestImages(versions: ReadonlyMap<AttachmentKey, RequestImageAttachment>): RequestImages;
 /** Key an image occurrence resolves its prepared version by. */
 export type AttachmentKey = string;
-/** Collect every image reference in request order, deduplicated by id. */
+/**
+ * Collect every LIVE image reference in request order, deduplicated by id.
+ *
+ * Two facts of the 0.2 message model are load-bearing here:
+ *
+ * - An image the framework marked `offloaded` is not sent as an image at all:
+ *   it is projected to placeholder text before serialization, so resolving a
+ *   request version for it would be wasted work (and preparing none for it is
+ *   what keeps the placeholder path from tripping the "not prepared" guard).
+ * - Tool results are first-class `tool` ROLE messages, so their content is
+ *   walked like any other message's. The 0.1.x nesting (`tool-result` blocks
+ *   inside a user message) no longer exists.
+ */
 export declare function collectImageRefs(messages: readonly {
-    content: ContentBlock[] | string;
+    readonly content: readonly ContentBlock[];
 }[]): Map<AttachmentKey, ImageAttachmentRef>;
 /** Concatenate the text blocks of one message. */
 export declare function textOf(content: readonly ContentBlock[] | string): string;

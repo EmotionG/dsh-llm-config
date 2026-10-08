@@ -25,7 +25,12 @@ console.log('describe() unwrapping')
 check('reads the {ok, value} envelope', /described\.ok !== true/.test(source))
 check('reads namespaces OFF value', /described\.value\.namespaces\.find/.test(source))
 check('never reads a bare .namespaces', !/\bdescribed\.namespaces/.test(source))
-check('prefers the user layer for display', /section\.user \?\? section\.value/.test(source))
+// 0.2 always returns a projected `user` layer, so presence alone cannot select
+// it: a field the user never overrode is simply absent from it. Selecting the
+// layer on its own presence renders an empty page.
+check('selects the user layer only when it declares providers',
+  /userLayer !== undefined && userLayer\.providers !== undefined/.test(source))
+check('falls back to the resolved value layer', /section\.value \?\? \{\}/.test(source))
 
 console.log('\ndiscoverModels() unwrapping')
 check('reads the {ok, value} envelope', /result\.ok !== true/.test(source))
@@ -40,6 +45,8 @@ check('KeyField reports drafts upward', /onDraft/.test(source))
 console.log('\nsettings write contract')
 check('uses path-addressed ops', /op: 'set', path: \['providers'\]/.test(source))
 check('passes the revision for conflict detection', /mutateSettings\(NS, \[.*\], revision\)/.test(source))
+check('writes to an UNDOTTED entry-id namespace', /const NS = 'llm-config'/.test(source))
+check('declares the dotted COPY namespace separately', /const COPY_NS = 'settings\.llm-config'/.test(applySource))
 
 console.log('\ncredentials write contract')
 check('passes a bare reference string', /setCredential: \(ref, value\) => ctx\.remote\.credentials\.set\(ref as never, value\)/.test(applySource))

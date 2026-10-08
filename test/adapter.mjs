@@ -216,5 +216,121 @@ full.push(JSON.stringify({ choices: [{ delta: { content: 'full answer' } }] }))
 full.push(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }))
 check('adapter input: terminated stream passes the completed() gate', full.completed() === true)
 
+console.log('\nrequest images on the 0.2 attachment seam (end-to-end over loopback)')
+// The 0.2 seam takes a full ImageRequestTarget (width/height/maxBytes) instead
+// of a raw policy, and `offloaded` occurrences must be projected to placeholder
+// text rather than resolved as request images. Both are observed here by
+// driving the REAL adapter against a loopback server that records its body.
+const { createServer } = await import('node:http')
+const bodies = []
+const server = createServer((req, res) => {
+  let raw = ''
+  req.on('data', chunk => { raw += chunk })
+  req.on('end', () => {
+    bodies.push(JSON.parse(raw))
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'done' } }] })}\n\n`)
+    res.write(`data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })}\n\n`)
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+const port = server.address().port
+
+const loopProvider = resolveConfig({
+  providers: {
+    loop: {
+      id: 'loop', baseURL: `http://127.0.0.1:${port}/v1`,
+      models: [{ id: 'vision-model', inputModalities: ['text', 'image'] }],
+    },
+  },
+}).providers[0]
+const targets = []
+const store = {
+  async readImageRequest(ref, target) {
+    targets.push({ ref, target })
+    return {
+      variantId: 'variant-1', attachment: ref,
+      data: new Uint8Array([1, 2, 3]), mediaType: 'image/png', bytes: 3,
+      width: target.width, height: target.height,
+      depth: 'uchar', space: 'srgb', hasAlpha: false,
+    }
+  },
+}
+const imgRef = {
+  attachmentId: 'att_1', mediaType: 'image/png', bytes: 2, width: 800, height: 600,
+}
+const withStore = new ConfigAdapter(
+  { get: () => loopProvider, resolveApiKey: async () => 'k', resolveAttachments: () => store }, 'loop')
+
+/** Drain one stream fully so the adapter's terminal gates run. */
+async function drain(adapter, options) {
+  for await (const _chunk of adapter.stream(options)) { /* drain */ }
+}
+
+await drain(withStore, {
+  provider: 'loop', model: 'vision-model',
+  messages: [{ role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image', attachment: imgRef }] }],
+})
+check('a live image resolves one request target', targets.length === 1, String(targets.length))
+check('the target carries integer width/height from the attachment geometry',
+  Number.isInteger(targets[0]?.target?.width) && Number.isInteger(targets[0]?.target?.height)
+  && targets[0].target.width > 0 && targets[0].target.height > 0,
+  JSON.stringify(targets[0]?.target))
+check('the target carries the encoder byte budget',
+  typeof targets[0]?.target?.maxBytes === 'number' && targets[0].target.maxBytes > 0,
+  JSON.stringify(targets[0]?.target))
+const liveParts = bodies[0]?.messages?.[0]?.content
+check('the live image reaches the wire as an image_url part',
+  Array.isArray(liveParts) && liveParts.some(p => p.type === 'image_url'),
+  JSON.stringify(liveParts))
+
+targets.length = 0
+await drain(withStore, {
+  provider: 'loop', model: 'vision-model',
+  messages: [{
+    role: 'user',
+    content: [{ type: 'text', text: 'look' }, { type: 'image', attachment: imgRef, offloaded: true }],
+  }],
+})
+check('an offloaded image resolves NO request version', targets.length === 0, String(targets.length))
+const offParts = bodies[1]?.messages?.[0]?.content
+check('an offloaded image is projected to placeholder text, not sent as bytes',
+  typeof offParts === 'string' && !offParts.includes('data:image'),
+  JSON.stringify(offParts)?.slice(0, 200))
+check('the placeholder still names the omitted attachment',
+  typeof offParts === 'string' && offParts.includes('att_1'),
+  JSON.stringify(offParts)?.slice(0, 200))
+
+// With every image offloaded there is nothing for the provider to receive as
+// bytes, so the route must not demand the attachment service at all — the
+// projection happens BEFORE the image gate.
+const noStoreLoop = new ConfigAdapter(
+  { get: () => loopProvider, resolveApiKey: async () => 'k', resolveAttachments: () => undefined }, 'loop')
+let offloadRefusal = null
+try {
+  await drain(noStoreLoop, {
+    provider: 'loop', model: 'vision-model',
+    messages: [{
+      role: 'user',
+      content: [{ type: 'image', attachment: imgRef, offloaded: true }],
+    }],
+  })
+} catch (error) {
+  offloadRefusal = error
+}
+check('an offloaded-only request needs no attachment service',
+  offloadRefusal === null, `${offloadRefusal?.code}: ${offloadRefusal?.message}`)
+const noStoreParts = bodies[2]?.messages?.[0]?.content
+check('and its placeholder text still reaches the provider',
+  typeof noStoreParts === 'string' && noStoreParts.includes('att_1'),
+  JSON.stringify(noStoreParts)?.slice(0, 200))
+
+await new Promise(resolve => server.close(resolve))
+
 console.log(`\n${failures === 0 ? 'ALL ADAPTER CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
 process.exit(failures === 0 ? 0 : 1)

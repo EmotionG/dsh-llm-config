@@ -28,15 +28,23 @@ export declare const NS = "llm-config";
  */
 export declare const RPC_CHANNEL = "/llm-config";
 /**
- * The stored section shape.
+ * The stored section shape, and this plugin's composition Config schema.
+ *
+ * Under the 0.2 settings model a plugin no longer installs a namespace of its
+ * own: the Loader entry IS the namespace, keyed by the entry id, and the entry
+ * schema exported as `Config` is what the settings service projects into a form
+ * and validates writes against. `providers` is declared `.volatile()` so a
+ * settings edit commits a fresh snapshot into this running plugin instead of
+ * restarting it — the value is read through `config.providers.get()` and
+ * `loader/volatile-update` announces each commit.
  *
  * `providers` is a DICT keyed by provider id, not an array: a configurable
  * provider directory entry names ONE provider profile by `settingsPath`, and a
  * path into an array cannot address a single row. The Models page reads each
  * profile's `apiKeyEnv` through that path.
  */
-export declare const ConfigSchema: z<Schemastery.ObjectS<{
-    providers: z<import("@deepseek-ai/cosmokit").Dict<{
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    providers: z<NoInfer<import("@deepseek-ai/cosmokit").Dict<{
         id?: string | null | undefined;
         displayName?: string | null | undefined;
         enabled?: boolean | null | undefined;
@@ -77,24 +85,24 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
             extraBody?: any;
             extraHeaders?: any;
         } & import("@deepseek-ai/cosmokit").Dict)[] | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict, string>, import("@deepseek-ai/cosmokit").Dict<Schemastery.ObjectT<{
-        id: z<string, string>;
-        displayName: z<string, string>;
-        enabled: z<boolean, boolean>;
-        protocol: z<string, string>;
-        baseURL: z<string, string>;
-        authScheme: z<string, string>;
-        apiKeyEnv: z<string, string>;
-        apiKeyHeader: z<string, string>;
-        apiKeyPrefix: z<string, string>;
-        organization: z<string, string>;
-        project: z<string, string>;
-        maxTokens: z<number, number>;
-        modelExcludePatterns: z<string[], string[]>;
-        defaultContextWindow: z<number, number>;
-        streamIdleTimeoutMs: z<number, number>;
-        retry: z<number, number>;
-        extraHeaders: z<any, any>;
+    } & import("@deepseek-ai/cosmokit").Dict, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<Schemastery.ObjectT<NoInfer<{
+        id: z<string, string, "defined">;
+        displayName: z<string, string, "plain">;
+        enabled: z<boolean, boolean, "plain">;
+        protocol: z<string, string, "plain">;
+        baseURL: z<string, string, "defined">;
+        authScheme: z<string, string, "plain">;
+        apiKeyEnv: z<string, string, "plain">;
+        apiKeyHeader: z<string, string, "plain">;
+        apiKeyPrefix: z<string, string, "plain">;
+        organization: z<string, string, "plain">;
+        project: z<string, string, "plain">;
+        maxTokens: z<number, number, "plain">;
+        modelExcludePatterns: z<string[], string[], "plain">;
+        defaultContextWindow: z<number, number, "plain">;
+        streamIdleTimeoutMs: z<number, number, "plain">;
+        retry: z<number, number, "plain">;
+        extraHeaders: z<any, any, "plain">;
         models: z<({
             id?: string | null | undefined;
             name?: string | null | undefined;
@@ -117,37 +125,37 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
             } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
             extraBody?: any;
             extraHeaders?: any;
-        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
-            id: z<string, string>;
-            name: z<string, string>;
-            description: z<string, string>;
-            protocol: z<string, string>;
-            contextWindow: z<number, number>;
-            maxTokens: z<number, number>;
-            temperature: z<number, number>;
-            topP: z<number, number>;
-            streamIdleTimeoutMs: z<number, number>;
-            reasoningEfforts: z<string[], string[]>;
-            defaultReasoningEffort: z<string, string>;
-            inputModalities: z<string[], string[]>;
-            stop: z<string[], string[]>;
-            effort: z<Schemastery.ObjectS<{
-                mode: z<string, string>;
-                field: z<string, string>;
-                values: z<string[], string[]>;
-                default: z<string, string>;
-            }>, Schemastery.ObjectT<{
-                mode: z<string, string>;
-                field: z<string, string>;
-                values: z<string[], string[]>;
-                default: z<string, string>;
-            }>>;
-            extraBody: z<any, any>;
-            extraHeaders: z<any, any>;
-        }>[]>;
-    }>, string>>;
-}>, Schemastery.ObjectT<{
-    providers: z<import("@deepseek-ai/cosmokit").Dict<{
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            id: z<string, string, "defined">;
+            name: z<string, string, "plain">;
+            description: z<string, string, "plain">;
+            protocol: z<string, string, "plain">;
+            contextWindow: z<number, number, "plain">;
+            maxTokens: z<number, number, "plain">;
+            temperature: z<number, number, "plain">;
+            topP: z<number, number, "plain">;
+            streamIdleTimeoutMs: z<number, number, "plain">;
+            reasoningEfforts: z<string[], string[], "plain">;
+            defaultReasoningEffort: z<string, string, "plain">;
+            inputModalities: z<string[], string[], "plain">;
+            stop: z<string[], string[], "plain">;
+            effort: z<Schemastery.ObjectS<NoInfer<{
+                mode: z<string, string, "plain">;
+                field: z<string, string, "plain">;
+                values: z<string[], string[], "plain">;
+                default: z<string, string, "plain">;
+            }>>, Schemastery.ObjectT<NoInfer<{
+                mode: z<string, string, "plain">;
+                field: z<string, string, "plain">;
+                values: z<string[], string[], "plain">;
+                default: z<string, string, "plain">;
+            }>>, "plain">;
+            extraBody: z<any, any, "plain">;
+            extraHeaders: z<any, any, "plain">;
+        }>>[], "plain">;
+    }>>, string>>, "volatile-defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    providers: z<NoInfer<import("@deepseek-ai/cosmokit").Dict<{
         id?: string | null | undefined;
         displayName?: string | null | undefined;
         enabled?: boolean | null | undefined;
@@ -188,24 +196,24 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
             extraBody?: any;
             extraHeaders?: any;
         } & import("@deepseek-ai/cosmokit").Dict)[] | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict, string>, import("@deepseek-ai/cosmokit").Dict<Schemastery.ObjectT<{
-        id: z<string, string>;
-        displayName: z<string, string>;
-        enabled: z<boolean, boolean>;
-        protocol: z<string, string>;
-        baseURL: z<string, string>;
-        authScheme: z<string, string>;
-        apiKeyEnv: z<string, string>;
-        apiKeyHeader: z<string, string>;
-        apiKeyPrefix: z<string, string>;
-        organization: z<string, string>;
-        project: z<string, string>;
-        maxTokens: z<number, number>;
-        modelExcludePatterns: z<string[], string[]>;
-        defaultContextWindow: z<number, number>;
-        streamIdleTimeoutMs: z<number, number>;
-        retry: z<number, number>;
-        extraHeaders: z<any, any>;
+    } & import("@deepseek-ai/cosmokit").Dict, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<Schemastery.ObjectT<NoInfer<{
+        id: z<string, string, "defined">;
+        displayName: z<string, string, "plain">;
+        enabled: z<boolean, boolean, "plain">;
+        protocol: z<string, string, "plain">;
+        baseURL: z<string, string, "defined">;
+        authScheme: z<string, string, "plain">;
+        apiKeyEnv: z<string, string, "plain">;
+        apiKeyHeader: z<string, string, "plain">;
+        apiKeyPrefix: z<string, string, "plain">;
+        organization: z<string, string, "plain">;
+        project: z<string, string, "plain">;
+        maxTokens: z<number, number, "plain">;
+        modelExcludePatterns: z<string[], string[], "plain">;
+        defaultContextWindow: z<number, number, "plain">;
+        streamIdleTimeoutMs: z<number, number, "plain">;
+        retry: z<number, number, "plain">;
+        extraHeaders: z<any, any, "plain">;
         models: z<({
             id?: string | null | undefined;
             name?: string | null | undefined;
@@ -228,42 +236,42 @@ export declare const ConfigSchema: z<Schemastery.ObjectS<{
             } & import("@deepseek-ai/cosmokit").Dict) | null | undefined;
             extraBody?: any;
             extraHeaders?: any;
-        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<{
-            id: z<string, string>;
-            name: z<string, string>;
-            description: z<string, string>;
-            protocol: z<string, string>;
-            contextWindow: z<number, number>;
-            maxTokens: z<number, number>;
-            temperature: z<number, number>;
-            topP: z<number, number>;
-            streamIdleTimeoutMs: z<number, number>;
-            reasoningEfforts: z<string[], string[]>;
-            defaultReasoningEffort: z<string, string>;
-            inputModalities: z<string[], string[]>;
-            stop: z<string[], string[]>;
-            effort: z<Schemastery.ObjectS<{
-                mode: z<string, string>;
-                field: z<string, string>;
-                values: z<string[], string[]>;
-                default: z<string, string>;
-            }>, Schemastery.ObjectT<{
-                mode: z<string, string>;
-                field: z<string, string>;
-                values: z<string[], string[]>;
-                default: z<string, string>;
-            }>>;
-            extraBody: z<any, any>;
-            extraHeaders: z<any, any>;
-        }>[]>;
-    }>, string>>;
-}>>;
-/** The empty section the composition entry starts from. */
+        } & import("@deepseek-ai/cosmokit").Dict)[], Schemastery.ObjectT<NoInfer<{
+            id: z<string, string, "defined">;
+            name: z<string, string, "plain">;
+            description: z<string, string, "plain">;
+            protocol: z<string, string, "plain">;
+            contextWindow: z<number, number, "plain">;
+            maxTokens: z<number, number, "plain">;
+            temperature: z<number, number, "plain">;
+            topP: z<number, number, "plain">;
+            streamIdleTimeoutMs: z<number, number, "plain">;
+            reasoningEfforts: z<string[], string[], "plain">;
+            defaultReasoningEffort: z<string, string, "plain">;
+            inputModalities: z<string[], string[], "plain">;
+            stop: z<string[], string[], "plain">;
+            effort: z<Schemastery.ObjectS<NoInfer<{
+                mode: z<string, string, "plain">;
+                field: z<string, string, "plain">;
+                values: z<string[], string[], "plain">;
+                default: z<string, string, "plain">;
+            }>>, Schemastery.ObjectT<NoInfer<{
+                mode: z<string, string, "plain">;
+                field: z<string, string, "plain">;
+                values: z<string[], string[], "plain">;
+                default: z<string, string, "plain">;
+            }>>, "plain">;
+            extraBody: z<any, any, "plain">;
+            extraHeaders: z<any, any, "plain">;
+        }>>[], "plain">;
+    }>>, string>>, "volatile-defined">;
+}>>, "plain">;
+/** The empty section a composition entry starts from. */
 export declare const EMPTY: {
     providers: {};
 };
-/** The stored section type, inferred from the schema. */
-type StoredSection = ReturnType<typeof ConfigSchema>;
+/** The resolved entry config type, inferred from the schema. */
+type StoredConfig = ReturnType<typeof Config>;
 /**
  * Required services. `llm` is a HARD dependency: the plugin registers adapter
  * routes on it during apply, so cordis must activate this plugin only once the
@@ -272,7 +280,7 @@ type StoredSection = ReturnType<typeof ConfigSchema>;
  * `ctx.get` because each is optional.
  */
 export declare const inject: string[];
-export declare function apply(ctx: Context, config: StoredSection): void;
+export declare function apply(ctx: Context, config: StoredConfig): void;
 export { ConfigAdapter, credentialRefFor, resolveConfig };
-export type { Config, ConfigProvider } from './config.ts';
+export type { Config as ResolvedConfig, ConfigProvider } from './config.ts';
 //# sourceMappingURL=index.d.ts.map

@@ -17,18 +17,27 @@
 import { fetch as undiciFetch } from 'undici'
 import {
   attributionHeaders,
-  contentHasImage,
   LlmAdapter,
   LlmError,
+  offloadedImageText,
+  projectOffloadedImages,
   resolveRetryPolicy,
+  type ContentBlock,
   type GenerateOptions,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmResolvedModelInfo,
+  type RequestMessage,
   type ResolvedRetryPolicy,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { AttachmentStore, ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
+import {
+  requestImageDimensions,
+  type AttachmentStore,
+  type ImageAttachmentRef,
+  type ImageRequestTarget,
+  type RequestImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import type { ConfigModel, ConfigProvider } from './config.ts'
 import { authHeaders, collectImageRefs, requestImages, requestUrl, serializeRequest, type RequestImages } from './serialize.ts'
 import { createTranslator, sseEvents } from './stream.ts'
@@ -51,6 +60,34 @@ export interface ProviderRegistry {
 /** Default request-image policy: pixel budget and encoded-byte target. */
 const IMAGE_MAX_PIXELS = 64_000_000
 const IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
+/**
+ * The provider-independent geometry one image is projected to for a request.
+ *
+ * The 0.2 attachment seam takes a full {@link ImageRequestTarget} — width,
+ * height and byte target — rather than a raw policy, so the adapter owns the
+ * projection and the cache key covers every transform input.
+ */
+function requestImageTarget(
+  ref: ImageAttachmentRef,
+  budget: { maxPixels: number; maxBytes: number },
+): ImageRequestTarget {
+  return {
+    ...requestImageDimensions(ref.width, ref.height, budget.maxPixels),
+    maxBytes: budget.maxBytes,
+  }
+}
+
+/**
+ * Whether a message still carries an image the provider must receive as bytes.
+ *
+ * An occurrence the framework marked `offloaded` is represented by placeholder
+ * text instead (see {@link projectOffloadedImages}), so it neither requires the
+ * model's image modality nor a resolved request version.
+ */
+function hasLiveImage(message: { readonly content: readonly ContentBlock[] }): boolean {
+  return message.content.some(block => block.type === 'image' && block.offloaded !== true)
+}
 
 /** Derive the highest declared effort when a model declares no default. */
 const EFFORT_RUNG: Record<string, number> = {
@@ -135,7 +172,7 @@ export class ConfigAdapter extends LlmAdapter {
     })))
   }
 
-  resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+  resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const entry = this.#entry()
     const configured = entry?.models.find(m => m.id === model)
     const contextWindow = configured?.contextWindow
@@ -184,10 +221,18 @@ export class ConfigAdapter extends LlmAdapter {
     // durable attachment store is mounted. The framework already projected
     // images away for text-only models, so an image reaching this point on a
     // text-only route means the modality declaration changed mid-flight.
-    const hasImages = options.messages.some(m => contentHasImage(m.content))
+    //
+    // Offloaded occurrences are projected to their placeholder text FIRST: they
+    // are a durable decision of the compaction path, they are not sent as
+    // bytes, and resolving a request version for one would be both wasteful and
+    // wrong.
+    const messages: RequestMessage[] = [
+      ...projectOffloadedImages(options.messages, ref => offloadedImageText(ref)),
+    ]
+    const hasImages = messages.some(hasLiveImage)
     const attachments = hasImages ? this.#registry.resolveAttachments() : undefined
     if (hasImages) {
-      const declared = model?.inputModalities ?? entry.models.find(m => m.id === options.model)?.inputModalities
+      const declared = model?.inputModalities
       if (declared === undefined || !declared.includes('image')) {
         throw new LlmError(`${PKG}: model "${options.model}" does not accept image input`, 'UNSUPPORTED_CONTENT')
       }
@@ -196,12 +241,12 @@ export class ConfigAdapter extends LlmAdapter {
       }
     }
     const images = hasImages && attachments !== undefined
-      ? await this.#prepareImages(options, attachments)
+      ? await this.#prepareImages(messages, attachments, options.signal)
       : undefined
 
     const apiKey = await this.#registry.resolveApiKey(entry)
     const url = requestUrl(entry, options.model, apiKey, true)
-    const body = serializeRequest(options, model, entry, images)
+    const body = serializeRequest({ ...options, messages }, model, entry, images)
     const headers: Record<string, string> = {
       accept: 'text/event-stream',
       // The seam requires attribution on every provider HTTP request.
@@ -278,10 +323,17 @@ export class ConfigAdapter extends LlmAdapter {
       throw new LlmError(`${PKG}: ${entry.displayName} closed the stream before completion `
         + `(no terminal event received)`, 'TRANSPORT')
     }
+    let protocolFailure = false
     for (const chunk of translator.finish()) {
       if (chunk.type === 'block-end' && chunk.block.type === 'text' && chunk.block.text.trim().length > 0) {
         sawVisibleText = true
       }
+      // A protocol that can terminate a turn by itself (the Responses
+      // `response.failed` / non-truncating `response.incomplete` pair) reports
+      // it as an error finish. That verdict is the provider's, so the
+      // degenerate-completion guard below must not overwrite it with a second,
+      // differently-coded finish chunk.
+      if (chunk.type === 'finish' && chunk.reason.kind === 'error') protocolFailure = true
       yield chunk
     }
     // A completed turn that streamed ONLY reasoning (thinking models
@@ -291,7 +343,7 @@ export class ConfigAdapter extends LlmAdapter {
     // folded into the Think disclosure and no reply. Surface it as the
     // framework's degenerate-completion failure instead, which is retryable
     // by the default policy and never silently swallows the turn.
-    if (!sawVisibleText && !translator.hasToolCalls()) {
+    if (!protocolFailure && !sawVisibleText && !translator.hasToolCalls()) {
       yield {
         type: 'finish',
         reason: {
@@ -307,19 +359,20 @@ export class ConfigAdapter extends LlmAdapter {
   }
 
   /**
-   * Resolve every distinct image reference of one request into its
+   * Resolve every distinct live image reference of one request into its
    * deterministic request version, in parallel, then expose them as the
    * serializer's {@link RequestImages} view.
    */
   async #prepareImages(
-    options: GenerateOptions,
+    messages: readonly RequestMessage[],
     attachments: AttachmentStore,
+    signal: AbortSignal | undefined,
   ): Promise<RequestImages> {
-    const refs: Map<string, ImageAttachmentRef> = collectImageRefs(options.messages)
+    const refs: Map<string, ImageAttachmentRef> = collectImageRefs(messages)
     const policy = { maxPixels: IMAGE_MAX_PIXELS, maxBytes: IMAGE_MAX_BYTES }
     const ordered = [...refs.values()]
     const versions = await Promise.all(ordered.map(
-      ref => attachments.readImageRequest(ref, policy, options.signal),
+      ref => attachments.readImageRequest(ref, requestImageTarget(ref, policy), signal),
     ))
     return requestImages(new Map(ordered.map((ref, i) => [ref.attachmentId, versions[i] as RequestImageAttachment])))
   }

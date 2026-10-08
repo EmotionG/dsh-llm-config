@@ -3,6 +3,7 @@
  * DSH's model picker does. This is the check that actually answers "why can't
  * DSH find the model", rather than reasoning about it.
  */
+import { Context } from '@deepseek-ai/cordis'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { resolveConfig } from '../lib/config.js'
 import { ConfigAdapter } from '../lib/adapter.js'
@@ -30,19 +31,13 @@ const resolved = resolveConfig(section)
 const registry = {
   get: id => resolved.providers.find(p => p.id === id),
   resolveApiKey: async () => 'k',
+  resolveAttachments: () => undefined,
 }
 
-// Build a minimal host context: only what LlmRuntime reads.
-const registered = []
-const ctx = {
-  llm: undefined,
-  effect(fn) { return fn() },
-  get() { return undefined },
-  logger: { warn() {}, info() {} },
-}
-const runtime = new LlmRuntime(ctx)
-ctx.llm = runtime
-runtime.start?.()
+// Register the runtime on a REAL cordis context: the service base class calls
+// `ctx.reflect.provide`, which a hand-rolled context object does not carry.
+const app = new Context()
+const runtime = new LlmRuntime(app)
 
 console.log('real LlmRuntime registration')
 const handle = runtime.registerAdapter(['zzzxin1'], new ConfigAdapter(registry, 'zzzxin1'))
@@ -67,12 +62,14 @@ try {
 }
 
 console.log('\nresolving one exact model through the runtime')
+// 0.2 renamed the runtime query to `resolveModelInfo`; the ADAPTER method stays
+// `resolveModel` and now takes an optional cancellation signal.
 try {
-  const info = await runtime.resolveModel('zzzxin1', 'kimi-k3')
-  check('resolveModel returns the model', info.id === 'kimi-k3', info.id)
+  const info = await runtime.resolveModelInfo('zzzxin1', 'kimi-k3')
+  check('resolveModelInfo returns the model', info.id === 'kimi-k3', info.id)
   check('it carries a context window', typeof info.context?.contextWindow === 'number')
 } catch (error) {
-  check('resolveModel works through the runtime', false, error.message)
+  check('resolveModelInfo works through the runtime', false, error.message)
 }
 
 console.log('\nreplacing the route set (the sync path)')

@@ -14,7 +14,7 @@
  * @module dsh-llm-config/adapter
  */
 import { LlmAdapter, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type ResolvedRetryPolicy, type StreamChunk } from '@deepseek-ai/dsh-llm';
-import type { AttachmentStore } from '@deepseek-ai/dsh-attachment';
+import { type AttachmentStore } from '@deepseek-ai/dsh-attachment';
 import type { ConfigProvider } from './config.ts';
 export declare const PKG = "llm-config";
 /** The live view the adapter reads through; rebuilt whenever config changes. */
@@ -43,7 +43,7 @@ export declare class ConfigAdapter extends LlmAdapter {
      */
     providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
-    resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
+    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
 }
 /** The public model metadata catalog this plugin enriches from. */
