@@ -18,7 +18,14 @@ import z from '@deepseek-ai/schemastery'
 import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 // Type-only: loads the Loader's `loader/volatile-update` event declaration.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { fetch as undiciFetch } from 'undici'
+/**
+ * The models.dev and `/models` discovery probes ride the GLOBAL fetch, read
+ * as a property at call time — the same transport contract as the adapter
+ * (see `requestFetch` there). Interceptor chains on `globalThis.fetch` (the
+ * billion-context dsh-native lane) can only see requests issued this way; a
+ * captured undici binding is invisible to them.
+ */
+const requestFetch = (): typeof globalThis.fetch => globalThis.fetch
 import type {
   LlmConfigurableProvider,
   LlmDiscoveredModel,
@@ -332,9 +339,9 @@ export function apply(ctx: Context, config: StoredConfig): void {
       models: [],
     }
 
-    let response: Awaited<ReturnType<typeof undiciFetch>>
+    let response: Awaited<ReturnType<typeof globalThis.fetch>>
     try {
-      response = await undiciFetch(`${base}/models`, {
+      response = await requestFetch()(`${base}/models`, {
         method: 'GET',
         headers: { accept: 'application/json', ...authHeaders(owner, apiKey) },
         ...(signal !== undefined ? { signal } : {}),

@@ -14,7 +14,23 @@
  * @module dsh-llm-config/adapter
  */
 
-import { fetch as undiciFetch } from 'undici'
+/**
+ * The transport every request rides: the GLOBAL fetch, read as a property AT
+ * CALL TIME — never a captured function value.
+ *
+ * In-process interceptors install themselves as accessor chains on
+ * `globalThis.fetch` (billion-context's dsh-native lane rewrites the property
+ * exactly this way to claim model traffic for ACP compression). A module
+ * binding such as undici's `import { fetch }` is captured at import time and
+ * no accessor can ever intercept it, which left every request this adapter
+ * issued invisible to compression, caching and attribution. The framework's
+ * own built-in provider honors the same contract via
+ * `options.fetch ?? globalThis.fetch`.
+ *
+ * `globalThis.fetch` carries undici's full feature set on Node 20+ (streaming
+ * bodies reach us as a WHATWG ReadableStream, so sseEvents consumes it as-is).
+ */
+const requestFetch = (): typeof globalThis.fetch => globalThis.fetch
 import {
   attributionHeaders,
   LlmAdapter,
@@ -256,9 +272,9 @@ export class ConfigAdapter extends LlmAdapter {
       ...(model?.extraHeaders as Record<string, string> | undefined ?? {}),
     }
 
-    let response: Awaited<ReturnType<typeof undiciFetch>>
+    let response: Awaited<ReturnType<typeof globalThis.fetch>>
     try {
-      response = await undiciFetch(url, {
+      response = await requestFetch()(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -447,7 +463,7 @@ export async function fetchCatalogCandidates(
 ): Promise<Record<string, CatalogCandidate[]>> {
   const timeout = AbortSignal.timeout(MODELS_DEV_TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const response = await undiciFetch(MODELS_DEV_API_URL, {
+  const response = await requestFetch()(MODELS_DEV_API_URL, {
     headers: { accept: 'application/json', ...attributionHeaders() },
     signal: combined,
   })

@@ -40,7 +40,7 @@
     "build:client": "node scripts/build-client.mjs || node scripts/build-client-sandbox.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "check:market": "node scripts/check-market-compat.mjs",
-    "test": "npm run build && node test/smoke.mjs && node test/client.mjs && node test/adapter.mjs && node test/mount.mjs && node test/sync.mjs && node test/channel.mjs && node test/rpc.mjs && node test/enrich.mjs && node test/runtime.mjs && node test/compat.mjs && node test/responses.mjs"
+    "test": "npm run build && node test/smoke.mjs && node test/client.mjs && node test/adapter.mjs && node test/transport.mjs && node test/mount.mjs && node test/sync.mjs && node test/channel.mjs && node test/rpc.mjs && node test/enrich.mjs && node test/runtime.mjs && node test/compat.mjs && node test/responses.mjs"
   },
   "keywords": [
     "dsh",
