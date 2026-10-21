@@ -5,3 +5,5 @@ node_modules
 # Local extraction of the installed desktop runtime's packages, produced by
 # scripts/extract-runtime.mjs and consumed by scripts/check-market-compat.mjs.
 .dsh-ref
+# Harness session artifacts (ops panel dumps, captured context snapshots).
+.dsh-ops
