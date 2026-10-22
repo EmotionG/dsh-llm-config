@@ -5,7 +5,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
-  "private": true,
+  "private": false,
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -70,6 +70,17 @@
   },
   "dependencies": {
     "undici": "^7"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmotionG/dsh-llm-config.git"
+  },
+  "homepage": "https://github.com/EmotionG/dsh-llm-config#readme",
+  "bugs": {
+    "url": "https://github.com/EmotionG/dsh-llm-config/issues"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
