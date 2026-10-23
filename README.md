@@ -20,7 +20,19 @@ node scripts/extract-runtime.mjs   # 从已安装的 app.asar 抽取运行时包
 
 ## 安装
 
-在 user/.dsh/profiles/<profile>/package.json 中加入本包，例如：
+从 GitHub 直接安装（源码构建，首次安装会请求一次构建授权）：
+
+```sh
+dsh plugin --profile web add github:EmotionG/dsh-llm-config
+```
+
+或使用 [Release](https://github.com/EmotionG/dsh-llm-config/releases) 中的预构建 tarball，跳过构建授权：
+
+```sh
+dsh plugin --profile web add https://github.com/EmotionG/dsh-llm-config/releases/download/v0.2.0/dsh-llm-config-0.2.0.tgz
+```
+
+也可以把本包作为本地依赖挂进 profile：
 
 ```json
 {
@@ -31,7 +43,7 @@ node scripts/extract-runtime.mjs   # 从已安装的 app.asar 抽取运行时包
 }
 ```
 
-然后重启 `dsh` / 桌面端。设置页会出现「模型供应商」。
+安装后重启 `dsh` / 桌面端。设置页会出现「模型供应商」。
 
 ## 设置模型（0.2）
 
