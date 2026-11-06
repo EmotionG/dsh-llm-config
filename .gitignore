@@ -7,3 +7,7 @@ node_modules
 .dsh-ref
 # Harness session artifacts (ops panel dumps, captured context snapshots).
 .dsh-ops
+
+# Release tarball produced by npm pack (regenerate, do not commit).
+*.tgz
+

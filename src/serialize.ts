@@ -653,9 +653,12 @@ function buildGemini(
   if (model?.topP !== undefined) generationConfig.topP = model.topP
   const stop = resolveStop(options, model)
   if (stop !== undefined) generationConfig.stopSequences = stop
-  if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig
-  // Effort rides generationConfig for Gemini.
+  // Effort rides generationConfig for Gemini, so it must be written BEFORE the
+  // emptiness check below: applying it afterwards let a model whose only
+  // generation setting was the thinking budget drop the object entirely, and
+  // the effort vanished from the wire without any error.
   applyEffort(generationConfig, model?.effort, options.reasoningEffort)
+  if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig
   if (model?.extraBody !== undefined) Object.assign(body, model.extraBody)
   return body
 }

@@ -61,6 +61,34 @@ dsh plugin --profile web add https://github.com/EmotionG/dsh-llm-config/releases
 
 插件自带手写页面，所以宿主调用 `ctx.settings.configure({ auto: false })` 关掉框架自动生成的表单。`settings.llm-config` 只作为**文案（locale）命名空间**存在。
 
+## 推理档位（思考强度）
+
+一个模型的思考强度是**一件事的两半**，两半由同一行配置描述：
+
+| 字段 | 作用 | 谁来读 |
+| --- | --- | --- |
+| `reasoningEfforts` | 对外**声明**可选档位 | 框架的 `resolveModel`，并据此校验每次请求的 `reasoningEffort` |
+| `effort` | 真正**写字段**的传输（`mode` / `field` / `values` / `default`） | 本插件的 `applyEffort`，写进请求体 |
+
+只写一半都会被补全，写错会**在加载时**报错而不是请求时 400：
+
+```yaml
+- id: glm-5.3
+  reasoningEfforts: [low, high, xhigh]   # 选择器显示这三档
+  effort:                                 # 发到线上的方式
+    mode: field                           # field = 标量；thinking = {type: value}
+    field: reasoning_effort               # 点号路径，如 output_config.effort
+    values: [low, high, xhigh]
+    default: xhigh
+```
+
+- **只写 `effort`**：`reasoningEfforts` 与 `defaultReasoningEffort` 从 `effort.values` / `effort.default` 派生。
+- **只写 `reasoningEfforts`**：`effort` 补成 `{mode: field, field: reasoning_effort}`，档位真的会发出去（早期版本这里只显示选择器、请求里什么都不发）。
+- **两边都写但词表不一致**：加载即 `fail`——`reasoningEfforts` 里有 `effort.values` 发不出的值，等于让用户选一个注定 400 的档位。
+- **两边都不写**：模型不广告档位，框架也就不允许任何 `reasoningEffort`（这是有意的：没声明的能力不该被猜）。
+
+请求里没指定档位时，用 `effort.default`（没写 `default` 才什么都不发）。`mode: thinking` 写的是 `{type: <value>}`，只有 Kimi K2.x 那类网关需要；Anthropic / Gemini 请用 `field` 指向各自的真实路径（如 `thinkingConfig.thinkingBudget`）。
+
 ## 图片输入（识图）
 
 给模型的「输入」勾上 `image` 即声明它接受图片。声明后：
